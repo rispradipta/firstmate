@@ -1,0 +1,28 @@
+=== live unsafe/edge cap-config probe (lab /tmp/fm-lab.4Ea327) ===
+$ value=''
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+$ value=\ 2
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+$ value=02
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+$ value=2
+2
+[exit 0]
+
+$ hardlinked file (link count=2)
+fm-dispatch-cap: config/max-concurrent-workers is hardlinked
+[exit 2]
+
+$ symlink to /dev/null
+fm-dispatch-cap: config/max-concurrent-workers is a symlink; use a regular file
+[exit 2]
+
+$ valid value=2
+2
+[exit 0]

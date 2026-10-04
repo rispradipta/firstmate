@@ -1,0 +1,7 @@
+ok - absent config resolves the default cap 2 and an empty home admits
+ok - config/max-concurrent-workers overrides the default cap
+ok - malformed, zero, multi-line, and symlinked caps are refused rather than defaulted
+ok - live counts ordinary ship and scout records only
+ok - check declines at cap with the at-cap code, exempts the task's own record, and admits once a slot frees
+ok - an at-cap dispatch stays queued and dispatches after a slot frees
+ok - a batch reports an over-cap pair as held, not failed, and keeps it queued

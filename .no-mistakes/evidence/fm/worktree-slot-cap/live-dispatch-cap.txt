@@ -1,0 +1,66 @@
+=== LAB HOME: /tmp/fm-lab.joQHKu ===
+away-posture record present? NO
+
+##### A. default cap on a fresh attended home (no away record) #####
+
+$ fm-dispatch-cap.sh cap
+2
+[exit 0]
+
+$ fm-dispatch-cap.sh live
+0
+[exit 0]
+
+$ fm-dispatch-cap.sh check   (empty home admits)
+live=0 cap=2
+[exit 0]
+
+##### B. configured cap override #####
+
+$ fm-dispatch-cap.sh cap   (config=3)
+3
+[exit 0]
+
+$ fm-dispatch-cap.sh check (live=0 cap=3 admits)
+live=0 cap=3
+[exit 0]
+
+##### C. malformed/unsafe config is refused, not defaulted #####
+
+$ cap  (abc -> exit 2)
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+$ cap  (0 -> exit 2)
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+$ cap  (multi-line -> exit 2)
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+[exit 2]
+
+##### D. live count: secondmate excluded #####
+
+$ fm-dispatch-cap.sh live (2 ordinary + 1 secondmate)
+2
+[exit 0]
+
+##### E. ATTENDED at-cap verdict (no away record exists) #####
+
+$ fm-dispatch-cap.sh check   (live=2 cap=2 -> exit 10)
+live=2 cap=2
+[exit 10]
+
+##### F. excluding the task's own record #####
+
+$ fm-dispatch-cap.sh check --exclude a
+live=1 cap=2
+[exit 0]
+
+##### G. freeing a slot admits the next dispatch #####
+
+$ fm-dispatch-cap.sh check   (live=1 cap=2 -> exit 0)
+live=1 cap=2
+[exit 0]
+
+away-posture record ever created? NO

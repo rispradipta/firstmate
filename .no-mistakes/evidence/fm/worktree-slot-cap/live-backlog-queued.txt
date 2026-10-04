@@ -1,0 +1,8 @@
+=== LAB HOME: /tmp/fm-lab.joQHKu; live=2 (cap 2); real backlog item c ===
+before: state=queued
+$ fm-spawn.sh c <proj> --mode no-mistakes --yolo off   (at cap)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+at cap: live=2 cap=2; task c stays queued and dispatches when a slot frees (config/max-concurrent-workers; bin/fm-dispatch-cap.sh)
+[exit 10]
+after:  state=queued
+c.meta published? NO

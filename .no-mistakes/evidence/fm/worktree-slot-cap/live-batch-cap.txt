@@ -1,0 +1,12 @@
+=== LAB HOME: /tmp/fm-lab.joQHKu; cap=1; one live task (busy) already at cap ===
+$ fm-spawn.sh x=<proj> y=<proj> --scout   (batch at cap)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+at cap: live=1 cap=1; task x stays queued and dispatches when a slot frees (config/max-concurrent-workers; bin/fm-dispatch-cap.sh)
+batch: HELD at cap x; stays queued for a later pass
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+at cap: live=1 cap=1; task y stays queued and dispatches when a slot frees (config/max-concurrent-workers; bin/fm-dispatch-cap.sh)
+batch: HELD at cap y; stays queued for a later pass
+[exit 10]
+x.meta published? NO
+y.meta published? NO

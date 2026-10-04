@@ -1,0 +1,42 @@
+=== LAB HOME: /tmp/fm-lab.joQHKu; away record? NO ===
+seeded live=2 (a ship + b scout), default cap=2
+
+##### H. fresh scout spawn while ATTENDED and at cap #####
+
+$ fm-spawn.sh c <proj> --scout   (at cap -> exit 10)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+at cap: live=2 cap=2; task c stays queued and dispatches when a slot frees (config/max-concurrent-workers; bin/fm-dispatch-cap.sh)
+[exit 10]
+c.meta published? NO
+live now: x 2
+
+##### I. relaunch of an existing task is EXEMPT from the cap #####
+
+$ fm-spawn.sh a --relaunch   (must NOT exit 10)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+REFUSED: task a has a missing, empty, or ambiguous worktree identity; preserving task state.
+[exit 1]
+
+##### J. secondmate spawn is EXEMPT from the cap #####
+
+$ fm-spawn.sh sm2 --secondmate   (must NOT exit 10)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+error: no firstmate home supplied or registered for sm2
+[exit 1]
+
+##### K. invalid cap config blocks the spawn as an error, not at-cap #####
+
+$ fm-spawn.sh d <proj> --scout   (invalid config -> exit 1)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+fm-dispatch-cap: config/max-concurrent-workers must be one positive base-10 integer
+error: spawn refused - this home's dispatch cap at config/max-concurrent-workers could not be evaluated (bin/fm-dispatch-cap.sh)
+[exit 1]
+
+##### L. freeing a slot clears the at-cap refusal for a fresh scout #####
+
+$ fm-spawn.sh e <proj> --scout   (live=0 -> passes the cap guard, reaches project/brief checks)
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.joQHKu
+error: could not resolve the shared Treehouse project lock for /tmp/fm-fake-project
+[exit 1]
+
+away record created? NO
