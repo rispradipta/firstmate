@@ -287,7 +287,7 @@ family_for_basename() {
     fm-bearings-board.test.sh|\
     fm-brief.test.sh|fm-dod-lib.test.sh|fm-vendor-auth-probe.test.sh|\
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
-    fm-classify-decision-key.test.sh|\
+    fm-classify-decision-key.test.sh|fm-telegram.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
     fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
@@ -313,7 +313,7 @@ family_for_basename() {
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
-    fm-mail.test.sh|fm-mail-check.test.sh|\
+    fm-mail.test.sh|fm-mail-check.test.sh|fm-telegram-check.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-watch-triage.test.sh|fm-task-inbox.test.sh|\
@@ -863,6 +863,8 @@ tests/fm-task-inbox.test.sh 31965
 tests/fm-tasks-axi.test.sh 2293
 tests/fm-teardown-endpoint-safety.test.sh 40851
 tests/fm-teardown.test.sh 202132
+tests/fm-telegram-check.test.sh 3730
+tests/fm-telegram.test.sh 5435
 tests/fm-test-fixture-cleanup.test.sh 866
 tests/fm-test-fixtures.test.sh 1802
 tests/fm-test-isolation-proof.test.sh 2866
