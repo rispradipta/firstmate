@@ -23,6 +23,7 @@ Collect successful per-script measurements for every member before calculating a
 
 `tests/fm-supervision-host.test.sh` uses 789123 ms from run 36669175457, after the merged [host runtime fix](https://github.com/kunchenguid/firstmate/pull/6179), rather than its pre-fix maximum of 1065298 ms.
 That post-fix value has only one sample in this baseline, so further green runs must establish its variance.
+The suite later grew past that hint in CI, so it is split across `tests/fm-supervision-host.test.sh` and `tests/fm-supervision-host-engine.test.sh`; the sibling's 800000 ms hint is that run's measured per-case durations apportioned between the two files, because neither file has a whole-script CI sample yet.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
@@ -68,6 +69,7 @@ Refresh the hints whenever a serial member grows materially or the lane gains sc
 Its header and `--help` own the modeled-budget check and output fields; read the current estimates from `--check-coverage` instead of retaining copied lane sums here.
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_serial_packing_budget_boundary`, verifies acceptance exactly at the budget and refusal one millisecond above it through the executable runner.
 The longest script, `tests/fm-watch-triage.test.sh`, is the indivisible floor for this layout.
+A floor that outgrows the budget forces a distribution or runtime fix rather than a larger job timeout: the supervision-host suite reached about 26 minutes in CI and is split across `tests/fm-supervision-host.test.sh`, which owns the shared fixture, and `tests/fm-supervision-host-engine.test.sh`, which sources it for the fixture and runs the second share of cases, so each schedules as its own lane member.
 The estimates use per-file maxima from different runs, not measured rebalanced jobs or an end-to-end latency guarantee.
 The baseline watch-triage samples range from 944375 to 1074843 ms, while each observed completed portable job adds at most 30 seconds beyond its summed scripts in these runs.
 Even so, maxima from five runs do not establish a P95 or guarantee future headroom.
