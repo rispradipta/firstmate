@@ -162,6 +162,10 @@ LAB_SOCKET=$(lab session list --json 2>/dev/null \
 PRIMARY_HOME="$TMP_ROOT/primary-home"
 mkdir -p "$PRIMARY_HOME/state" "$PRIMARY_HOME/config"
 printf 'off\n' > "$PRIMARY_HOME/config/herdr-presentation-spaces"
+# This suite runs several workers in one home to exercise placement, so it
+# raises the standing dispatch cap above the default 2 rather than let the cap
+# (bin/fm-dispatch-cap.sh) hold a placement fixture queued.
+printf '100\n' > "$PRIMARY_HOME/config/max-concurrent-workers"
 SM_ID="lwsm1"
 SM_HOME="$TMP_ROOT/secondmate-home"
 mkdir -p "$SM_HOME/state" "$SM_HOME/config" "$SM_HOME/projects" "$SM_HOME/bin" "$SM_HOME/data"

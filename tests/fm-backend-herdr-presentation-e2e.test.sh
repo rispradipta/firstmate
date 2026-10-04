@@ -518,6 +518,10 @@ touch "$HOME_DIR/state/.last-watcher-beat"
 # Presentation spaces are on by default, so the flat baseline below opts out
 # explicitly; the projected cases each restate the setting they exercise.
 printf 'off\n' > "$HOME_DIR/config/herdr-presentation-spaces"
+# This suite keeps many workers live in one home to exercise projection, so it
+# raises the standing dispatch cap above the default 2 rather than let the cap
+# (bin/fm-dispatch-cap.sh) hold a projection fixture queued.
+printf '100\n' > "$HOME_DIR/config/max-concurrent-workers"
 write_ship_brief "$HOME_DIR" anchor 'Projection anchor fixture.'
 write_ship_brief "$HOME_DIR" shape 'Projection E2E fixture.'
 write_ship_brief "$HOME_DIR" order-a 'Projection ordering fixture A.'
@@ -971,6 +975,10 @@ SECOND_HOME_A="$TMP_ROOT/home-2ndmate-alpha"
 SECOND_HOME_B="$TMP_ROOT/home-2ndmate-bravo"
 mkdir -p "$SECOND_HOME_A/state" "$SECOND_HOME_A/config" "$SECOND_HOME_A/data" \
   "$SECOND_HOME_B/state" "$SECOND_HOME_B/config" "$SECOND_HOME_B/data"
+# Both secondmate homes host more than the default cap of concurrent workers for
+# the multi-home projection cases, so each configures a higher standing cap.
+printf '100\n' > "$SECOND_HOME_A/config/max-concurrent-workers"
+printf '100\n' > "$SECOND_HOME_B/config/max-concurrent-workers"
 printf 'alpha\n' > "$SECOND_HOME_A/.fm-secondmate-home"
 printf 'bravo\n' > "$SECOND_HOME_B/.fm-secondmate-home"
 touch "$SECOND_HOME_A/state/.last-watcher-beat" "$SECOND_HOME_B/state/.last-watcher-beat"
