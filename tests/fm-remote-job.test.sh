@@ -737,88 +737,100 @@ pass "Linux supervision recovers crashes and stops orphaned commands"
 # A serving loop must never reclaim (and kill) a running job that a live peer
 # serving loop is supervising. A peer loses its lock only momentarily during a
 # handoff, and its lane is still doing real work; reclaiming it would destroy
-# that work and publish a false unknown-completion result.
-PEER_ROOT="$TMP_ROOT/peer-root"
-PEER_HOME="$TMP_ROOT/peer-account"
-PEER_STATE="$TMP_ROOT/peer-state"
-PEER_STARTED="$TMP_ROOT/peer-started"
-PEER_SIDE_EFFECT="$TMP_ROOT/peer-side-effect"
-cp -R "$REMOTE_ROOT" "$PEER_ROOT"
-mkdir -p "$PEER_HOME"
-chmod 700 "$PEER_HOME"
-cat > "$PEER_ROOT/bin/fm-peer-hold.sh" <<'SH'
+# that work and publish a false unknown-completion result. The serving loop's
+# command shape differs by platform - Linux's restart supervisor launches
+# "<worker> --serve", the macOS LaunchAgent launches the bare "<worker>" - so
+# both shapes must be recognized as a live serving loop.
+peer_reclaim_case() { # <name> <peer-a-platform> [peer-a-args...]
+  local name=$1 platform=$2; shift 2
+  local peer_root="$TMP_ROOT/$name-root"
+  local peer_home="$TMP_ROOT/$name-account"
+  local peer_state="$TMP_ROOT/$name-state"
+  local peer_started="$TMP_ROOT/$name-started"
+  local peer_side_effect="$TMP_ROOT/$name-side-effect"
+  local peer_job_id peer_job peer_lane_group peer_lane_pid deadline
+  cp -R "$REMOTE_ROOT" "$peer_root"
+  mkdir -p "$peer_home"
+  chmod 700 "$peer_home"
+  cat > "$peer_root/bin/fm-peer-hold.sh" <<'SH'
 #!/bin/bash
 trap '' HUP INT TERM
 printf 'started\n' > "$1"
 sleep 30
 printf 'ran\n' > "$2"
 SH
-chmod +x "$PEER_ROOT/bin/fm-peer-hold.sh"
-git -C "$PEER_ROOT" add bin/fm-peer-hold.sh
-git -C "$PEER_ROOT" commit -qm 'peer hold job'
-HOME="$PEER_HOME" FM_ROOT_OVERRIDE="$PEER_ROOT" FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" \
-  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$PEER_ROOT/bin/fm-remote-job-worker.sh" --serve \
-  > "$TMP_ROOT/peer-a.out" 2> "$TMP_ROOT/peer-a.err" &
-PEER_LOOP_A_PID=$!
-for _ in $(seq 1 300); do
-  [ -f "$PEER_STATE/worker.ready" ] && break
-  sleep 0.05
-done
-assert_present "$PEER_STATE/worker.ready" "the peer fixture's owner loop did not become ready"
-PEER_JOB_ID=$(FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" FM_REMOTE_JOB_TIMEOUT=25 \
-  FM_REMOTE_JOB_QUEUE_TIMEOUT=60 fm_remote_job_stage "$PEER_HOME" "$PEER_ROOT" "$REMOTE_HOME" \
-  fm-peer-hold.sh "$PEER_STARTED" "$PEER_SIDE_EFFECT" < /dev/null) \
-  || fail "the peer fixture job did not stage"
-PEER_JOB="$PEER_STATE/jobs/$PEER_JOB_ID"
-for _ in $(seq 1 200); do
-  [ -e "$PEER_JOB/.claim/supervisor" ] && break
-  sleep 0.05
-done
-assert_present "$PEER_JOB/.claim/supervisor" "the peer fixture job was not claimed by a lane"
-# Freeze only the owner loop; its lane keeps running, and the lane's recorded
-# parent stays a live serve loop.
-kill -STOP "$PEER_LOOP_A_PID"
-for _ in $(seq 1 100); do
-  [ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] && break
-  sleep 0.05
-done
-[ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] \
-  || fail "the peer owner loop did not stop"
-rm -rf -- "$PEER_STATE/worker.lock"
-HOME="$PEER_HOME" FM_ROOT_OVERRIDE="$PEER_ROOT" FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" \
-  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$PEER_ROOT/bin/fm-remote-job-worker.sh" --serve \
-  > "$TMP_ROOT/peer-b.out" 2> "$TMP_ROOT/peer-b.err" &
-PEER_LOOP_B_PID=$!
-for _ in $(seq 1 300); do
-  [ "$(cat "$PEER_STATE/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] && break
-  sleep 0.05
-done
-[ "$(cat "$PEER_STATE/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] \
-  || fail "the replacement peer loop did not take ownership"
-PEER_DEADLINE=$((SECONDS + 4))
-while [ "$SECONDS" -lt "$PEER_DEADLINE" ]; do
-  [ "$(fm_remote_job_read_state "$PEER_JOB" 2>/dev/null || true)" = running ] \
-    || fail "a peer loop reclaimed a running job owned by a live serving loop"
-  kill -0 "$(cat "$PEER_JOB/.claim/supervisor")" 2>/dev/null \
-    || fail "a peer loop stopped the live serving loop's lane"
-  sleep 0.2
-done
-assert_absent "$PEER_SIDE_EFFECT" "the peer fixture's job was interrupted by the replacement loop"
-PEER_LANE_GROUP=$(cat "$PEER_JOB/.claim/group" 2>/dev/null || true)
-PEER_LANE_PID=$(cat "$PEER_JOB/.claim/supervisor" 2>/dev/null || true)
-[ -n "$PEER_LANE_GROUP" ] || fail "the peer fixture job never recorded its command group"
-kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
-[ -z "$PEER_LANE_PID" ] || kill -KILL "$PEER_LANE_PID" 2>/dev/null || true
-kill -KILL "$PEER_LOOP_A_PID" 2>/dev/null || true
-wait "$PEER_LOOP_A_PID" 2>/dev/null || true
-PEER_LOOP_A_PID=
-kill -TERM "$PEER_LOOP_B_PID"
-for _ in $(seq 1 100); do kill -0 "$PEER_LOOP_B_PID" 2>/dev/null || break; sleep 0.05; done
-kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
-wait "$PEER_LOOP_B_PID" 2>/dev/null || true
-PEER_LOOP_B_PID=
-PEER_LANE_GROUP=
-pass "a live peer loop's running job is never reclaimed"
+  chmod +x "$peer_root/bin/fm-peer-hold.sh"
+  git -C "$peer_root" add bin/fm-peer-hold.sh
+  git -C "$peer_root" commit -qm 'peer hold job'
+  HOME="$peer_home" FM_ROOT_OVERRIDE="$peer_root" FM_REMOTE_JOB_STATE_ROOT="$peer_state" \
+    FM_REMOTE_JOB_PLATFORM_OVERRIDE="$platform" "$peer_root/bin/fm-remote-job-worker.sh" "$@" \
+    > "$TMP_ROOT/$name-a.out" 2> "$TMP_ROOT/$name-a.err" &
+  PEER_LOOP_A_PID=$!
+  for _ in $(seq 1 300); do
+    [ -f "$peer_state/worker.ready" ] && break
+    sleep 0.05
+  done
+  assert_present "$peer_state/worker.ready" "the $name peer fixture's owner loop did not become ready"
+  peer_job_id=$(FM_REMOTE_JOB_STATE_ROOT="$peer_state" FM_REMOTE_JOB_TIMEOUT=25 \
+    FM_REMOTE_JOB_QUEUE_TIMEOUT=60 fm_remote_job_stage "$peer_home" "$peer_root" "$REMOTE_HOME" \
+    fm-peer-hold.sh "$peer_started" "$peer_side_effect" < /dev/null) \
+    || fail "the $name peer fixture job did not stage"
+  peer_job="$peer_state/jobs/$peer_job_id"
+  for _ in $(seq 1 200); do
+    [ -e "$peer_job/.claim/supervisor" ] && break
+    sleep 0.05
+  done
+  assert_present "$peer_job/.claim/supervisor" "the $name peer fixture job was not claimed by a lane"
+  # Freeze only the owner loop; its lane keeps running, and the lane's recorded
+  # parent stays a live serving loop of the peer's platform shape.
+  kill -STOP "$PEER_LOOP_A_PID"
+  for _ in $(seq 1 100); do
+    [ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] && break
+    sleep 0.05
+  done
+  [ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] \
+    || fail "the $name peer owner loop did not stop"
+  rm -rf -- "$peer_state/worker.lock"
+  HOME="$peer_home" FM_ROOT_OVERRIDE="$peer_root" FM_REMOTE_JOB_STATE_ROOT="$peer_state" \
+    FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$peer_root/bin/fm-remote-job-worker.sh" --serve \
+    > "$TMP_ROOT/$name-b.out" 2> "$TMP_ROOT/$name-b.err" &
+  PEER_LOOP_B_PID=$!
+  for _ in $(seq 1 300); do
+    [ "$(cat "$peer_state/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] && break
+    sleep 0.05
+  done
+  [ "$(cat "$peer_state/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] \
+    || fail "the $name replacement peer loop did not take ownership"
+  deadline=$((SECONDS + 4))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ "$(fm_remote_job_read_state "$peer_job" 2>/dev/null || true)" = running ] \
+      || fail "a $name peer loop reclaimed a running job owned by a live serving loop"
+    kill -0 "$(cat "$peer_job/.claim/supervisor")" 2>/dev/null \
+      || fail "a $name peer loop stopped the live serving loop's lane"
+    sleep 0.2
+  done
+  assert_absent "$peer_side_effect" "the $name peer fixture's job was interrupted by the replacement loop"
+  peer_lane_group=$(cat "$peer_job/.claim/group" 2>/dev/null || true)
+  peer_lane_pid=$(cat "$peer_job/.claim/supervisor" 2>/dev/null || true)
+  [ -n "$peer_lane_group" ] || fail "the $name peer fixture job never recorded its command group"
+  PEER_LANE_GROUP="$peer_lane_group"
+  kill -KILL -- "-$peer_lane_group" 2>/dev/null || true
+  [ -z "$peer_lane_pid" ] || kill -KILL "$peer_lane_pid" 2>/dev/null || true
+  kill -KILL "$PEER_LOOP_A_PID" 2>/dev/null || true
+  wait "$PEER_LOOP_A_PID" 2>/dev/null || true
+  PEER_LOOP_A_PID=
+  kill -TERM "$PEER_LOOP_B_PID"
+  for _ in $(seq 1 100); do kill -0 "$PEER_LOOP_B_PID" 2>/dev/null || break; sleep 0.05; done
+  kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
+  wait "$PEER_LOOP_B_PID" 2>/dev/null || true
+  PEER_LOOP_B_PID=
+  PEER_LANE_GROUP=
+}
+
+peer_reclaim_case peer-serve Linux --serve
+pass "a live peer loop's running job is never reclaimed (--serve)"
+peer_reclaim_case peer-bare Darwin
+pass "a live peer loop's running job is never reclaimed (bare)"
 
 mkdir -p "$ACCOUNT_HOME/.local/bin"
 PREEXEC_STARTED="$TMP_ROOT/preexecution-started"

@@ -1032,6 +1032,33 @@ fm_remote_job_root_is_live() { # <remote-root>
   [ -f "$root/bin/fm-remote-job-worker.sh" ] && [ ! -L "$root/bin/fm-remote-job-worker.sh" ]
 }
 
+# The code root a worker command line was launched from, echoed only when the
+# command is unambiguously a serving-loop worker invocation: an absolute script
+# path ending in the worker suffix, optionally preceded by the interpreter ps
+# reports as "/bin/bash <script>", with at most the --serve argument after it.
+# The macOS LaunchAgent launches the bare path and Linux's restart supervisor
+# launches "<path> --serve", so both shapes name a serving loop; a --lane
+# process never matches. This single predicate is what the orphan reaper and the
+# peer-reclaim guard both use, so they cannot disagree on the shape.
+fm_remote_job_worker_command_root() { # <command>
+  local command=$1 path prefix leading suffix=/bin/fm-remote-job-worker.sh
+  case "$command" in
+    *"$suffix --serve") path=${command%" --serve"} ;;
+    *"$suffix") path=$command ;;
+    *) return 1 ;;
+  esac
+  prefix=${path%"$suffix"}
+  case "$prefix" in /*) ;; *) return 1 ;; esac
+  leading=${prefix%% *}
+  # Drop the leading token only when it really is the interpreter binary, so a
+  # code root that itself contains a space is read whole rather than split.
+  if [ "$leading" != "$prefix" ] && [ -f "$leading" ] && [ -x "$leading" ]; then
+    prefix=${prefix#"$leading" }
+  fi
+  case "$prefix" in /*) ;; *) return 1 ;; esac
+  printf '%s\n' "$prefix"
+}
+
 # The isolated process group that owns <pid>'s whole worker tree, echoed only
 # when signalling it is provably safe: the group is not this shell's own, not a
 # reserved id, and its leader is itself a remote job worker. A worker started

@@ -617,10 +617,7 @@ worker_claim_supervisor_live_peer() { # <job-dir>
   case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
   [ "$ppid" -gt 1 ] || return 1
   command=$(fm_remote_job_process_command "$ppid" 2>/dev/null || true)
-  case "$command" in
-    *fm-remote-job-worker.sh*--serve*) return 0 ;;
-  esac
-  return 1
+  fm_remote_job_worker_command_root "$command" >/dev/null 2>&1
 }
 
 # Reclaim a running job this serving loop does not own: a record left by a
