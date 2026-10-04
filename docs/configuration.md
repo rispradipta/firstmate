@@ -96,7 +96,7 @@ Each effective `FM_HOME` contains private operational directories.
 
 `projects/` holds local project clones.
 Firstmate reads these clones, but changes them only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
-Untracked files and directories whose names begin with `scratchpad` are also gitignored, so temporary scratch does not make porcelain-based secondmate sync guards treat a home as dirty.
+Untracked files and directories whose names begin with `scratchpad` are also gitignored, so temporary scratch stays out of an ordinary `git status`.
 
 ### Format and lifecycle references
 
@@ -714,10 +714,11 @@ The seeded home's `data/charter.md` owns the standard secondmate lifecycle and e
 ### Identity markers and upgrades
 
 Each seed writes an `.fm-secondmate-home` identity marker at the home root, alongside a durable `.fm-secondmate-parent` record of the home's route to its parent (see "Provision a route" in [`docs/remote-secondmates.md`](remote-secondmates.md)).
-The tracked root `.gitignore` ignores both markers, so validation can read them without making a freshly seeded home appear dirty to porcelain-based safety checks.
+The tracked root `.gitignore` ignores both markers, and a machine-local `treehouse.toml` too, so they stay out of an ordinary `git status`.
 
-This does not relax protection for any other untracked file.
-An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
+The shared fast-forward guard counts only tracked changes (staged or unstaged), so no untracked file blocks a firstmate home's update: the identity markers, a machine-local `treehouse.toml`, and temporary scratch never report a home dirty.
+An untracked file is never unlanded work, and a fast-forward that would overwrite one already fails safely on its own.
+That is what lets an existing linked-worktree home that predates the ignore advance through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
 
