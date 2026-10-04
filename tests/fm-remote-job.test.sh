@@ -652,10 +652,12 @@ zombie_probe_case() { # <name> <with-lock 0|1>
   wait "$parent" 2>/dev/null || true
   ZOMBIE_PARENT=
 }
-zombie_probe_case zombie-lock 1
-pass "the probe rejects a zombie owner's heartbeat under a stale lock"
-zombie_probe_case zombie-no-lock 0
-pass "the probe rejects a zombie owner's heartbeat with the lock removed"
+if [ "$(uname -s)" = Linux ]; then
+  zombie_probe_case zombie-lock 1
+  pass "the probe rejects a zombie owner's heartbeat under a stale lock"
+  zombie_probe_case zombie-no-lock 0
+  pass "the probe rejects a zombie owner's heartbeat with the lock removed"
+fi
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
 kill -KILL "$CRASHED_WORKER_PID"
