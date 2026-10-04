@@ -24,9 +24,11 @@
 # A tracked-files fast-forward never touches the gitignored operational dirs
 # (data/, state/, config/, projects/, .no-mistakes/), so it cannot disturb a
 # secondmate's backlog, projects, or in-flight work.
-# The seeded .fm-secondmate-home identity marker is gitignored too; the local
-# sync tolerates only that marker during the one-time upgrade of pre-ignore
-# linked-worktree homes.
+# The dirtiness guard below counts only TRACKED changes: an untracked file is
+# never unlanded work, and a fast-forward that would overwrite one already fails
+# safely on its own. That one rule is what lets the seeded .fm-secondmate-home
+# identity marker, a machine-local treehouse.toml, or any other untracked config
+# file sit in a code root without blocking a sync.
 # A clean secondmate divergence is reconciled only when a three-way tree proof
 # shows that its complete local result is already present in the target, as
 # happens after an upstream squash merge. Every other divergence stays put and
@@ -267,13 +269,16 @@ remote_inherit_failure_reason() { # <output>
   fi
 }
 
+# A working tree is dirty only when it has TRACKED changes (staged or
+# unstaged). An untracked file is never unlanded work that a fast-forward could
+# lose, and a fast-forward that would overwrite one already fails safely on its
+# own, so untracked entries are ignored here. This is what keeps an untracked
+# machine-local config file - a gitignored treehouse.toml, or the secondmate seed
+# marker before its ignore lands - from blocking an update. Prints the first
+# tracked-change line, or nothing.
 dirty_status() {
-  local dir=$1 ignore_seed_marker=${2:-no}
-  if [ "$ignore_seed_marker" = yes ]; then
-    git -C "$dir" status --porcelain 2>/dev/null | awk -v marker="?? $SUB_HOME_MARKER" '$0 != marker { print; exit }'
-  else
-    git -C "$dir" status --porcelain 2>/dev/null | head -1
-  fi
+  local dir=$1
+  git -C "$dir" status --porcelain 2>/dev/null | awk '$1 != "??" { print; exit }'
 }
 
 secondmate_update_reconcile_marker_path() { # <state> <id>
@@ -382,8 +387,8 @@ live_secondmate_meta_records() {
 FF_STATUS=""
 FF_INSTR=""
 ff_target() {
-  local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no} ignore_seed_marker=${5:-no}
-  local secondmate_id=${6:-} reconciliation_state=${7:-}
+  local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no}
+  local secondmate_id=${5:-} reconciliation_state=${6:-}
   FF_STATUS="skipped"
   FF_INSTR=""
 
@@ -432,7 +437,7 @@ ff_target() {
     return 0
   fi
 
-  if [ -n "$(dirty_status "$dir" "$ignore_seed_marker")" ]; then
+  if [ -n "$(dirty_status "$dir")" ]; then
     echo "$label: skipped: dirty working tree"
     return 0
   fi
@@ -548,7 +553,7 @@ process_secondmate() {
   esac
   FF_SEEN_HOMES="$FF_SEEN_HOMES $home_real"
 
-  ff_target "$home_real" "secondmate $id" "$base_mode" yes yes "$id" "${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+  ff_target "$home_real" "secondmate $id" "$base_mode" yes "$id" "${FM_STATE_OVERRIDE:-$FM_HOME/state}"
   if [ -n "$window" ] && { [ "$FF_STATUS" = "updated" ] || [ "$FF_STATUS" = "current" ]; } \
     && type fm_ff_after_secondmate_settled >/dev/null 2>&1; then
     fm_ff_after_secondmate_settled "$id" "$home_real" "$window" "$FF_STATUS" "$FF_INSTR"
