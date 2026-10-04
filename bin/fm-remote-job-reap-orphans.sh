@@ -39,7 +39,6 @@ SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 . "$SCRIPT_DIR/fm-remote-job-lib.sh"
 
 DRY_RUN=0
-REAP_SUFFIX=/bin/fm-remote-job-worker.sh
 
 reap_die() { printf 'fm-remote-job-reap-orphans: %s\n' "$1" >&2; exit 2; }
 
@@ -52,29 +51,6 @@ worker whose root still exists - the account's LaunchAgent worker, a live
 remote secondmate's worker - is never a candidate. --dry-run reports the
 candidates and signals nothing. Read this script's header for the full rule.
 TXT
-}
-
-# The code root a worker command line was launched from, echoed only when the
-# command is unambiguously a worker invocation: an absolute script path ending
-# in the worker suffix, optionally preceded by the interpreter ps reports as
-# "/bin/bash <script>", with at most the --serve argument after it.
-reap_worker_root() { # <command>
-  local command=$1 path prefix leading
-  case "$command" in
-    *"$REAP_SUFFIX --serve") path=${command%" --serve"} ;;
-    *"$REAP_SUFFIX") path=$command ;;
-    *) return 1 ;;
-  esac
-  prefix=${path%"$REAP_SUFFIX"}
-  case "$prefix" in /*) ;; *) return 1 ;; esac
-  leading=${prefix%% *}
-  # Drop the leading token only when it really is the interpreter binary, so a
-  # code root that itself contains a space is read whole rather than split.
-  if [ "$leading" != "$prefix" ] && [ -f "$leading" ] && [ -x "$leading" ]; then
-    prefix=${prefix#"$leading" }
-  fi
-  case "$prefix" in /*) ;; *) return 1 ;; esac
-  printf '%s\n' "$prefix"
 }
 
 reap_is_self_or_ancestor() { # <pid>
@@ -100,7 +76,7 @@ reap_orphans() {
   while read -r pid command; do
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     [ -n "$command" ] || continue
-    root=$(reap_worker_root "$command") || continue
+    root=$(fm_remote_job_worker_command_root "$command") || continue
     fm_remote_job_root_is_live "$root" && continue
     [ "$pid" != "$$" ] || continue
     reap_is_self_or_ancestor "$pid" && continue
