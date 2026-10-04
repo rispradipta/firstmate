@@ -280,6 +280,14 @@ LOG_VERB=$(status_line_verb "$LOG_LINE")
 # down or dead mate; only the remote host's own dead/missing verdict may say
 # the endpoint is actually gone.
 if [ -n "$REMOTE_HOST" ]; then
+  # A remote mate's parent record deliberately carries a local sentinel
+  # (`window=remote:<id>`) beside the real host-local endpoint. Prove the
+  # record's own endpoint fields agree before any read: a drifted or legacy
+  # record must be reported as record drift, never read as a local endpoint
+  # that happens to be absent (which would read as a dead mate).
+  if ! fm_backend_remote_endpoint_of_meta "$META" "$ID"; then
+    emit unknown remote-endpoint "endpoint record mismatch: $FM_BACKEND_REMOTE_DIAGNOSIS"
+  fi
   if ! REMOTE_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$ID" \
     fm-remote-secondmate-control.sh state "$ID" < /dev/null 2>/dev/null); then
     REMOTE_STATE=

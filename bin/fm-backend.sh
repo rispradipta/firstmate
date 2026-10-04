@@ -362,6 +362,89 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
+# fm_backend_meta_is_remote: 0 when a task record names a remote placement.
+# This is the single owner of that signal; the whole endpoint contract hangs
+# off it (fm-send.sh, fm-crew-state.sh, and fm-peek.sh route on it).
+fm_backend_meta_is_remote() {  # <meta-file>
+  [ -n "$(fm_meta_get "$1" remote_host)" ]
+}
+
+# fm_backend_remote_endpoint_of_meta: resolve the endpoint a READER must use for
+# a remotely placed task, and prove the record's own endpoint fields agree with
+# each other before any reader acts on them.
+#
+# A remote secondmate deliberately records `window=remote:<id>` as a local
+# sentinel: its real endpoint lives on another host, named by `remote_backend=`
+# and `remote_target=` (bin/fm-spawn.sh's spawn_remote_secondmate). Reading that
+# sentinel as a local backend target is what makes a live mate report dead, so
+# this is the one owner of the sentinel's meaning for readers. A record whose
+# own fields disagree is reported as drift with its exact defect rather than
+# silently falling through to the sentinel.
+#
+# Sets, on success:
+#   FM_BACKEND_REMOTE_BACKEND     the backend on the mate's own host
+#   FM_BACKEND_REMOTE_TARGET      the endpoint on that backend
+# On an inconsistent record sets FM_BACKEND_REMOTE_DIAGNOSIS to one
+# operator-readable line and returns 1. Returns 2, setting nothing else, when
+# <meta-file> is not a remote placement.
+FM_BACKEND_REMOTE_BACKEND=
+FM_BACKEND_REMOTE_TARGET=
+FM_BACKEND_REMOTE_DIAGNOSIS=
+fm_backend_remote_endpoint_of_meta() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 backend target window session
+  FM_BACKEND_REMOTE_BACKEND=
+  FM_BACKEND_REMOTE_TARGET=
+  FM_BACKEND_REMOTE_DIAGNOSIS=
+  fm_backend_meta_is_remote "$meta" || return 2
+  backend=$(fm_meta_get "$meta" remote_backend)
+  target=$(fm_meta_get "$meta" remote_target)
+  window=$(fm_meta_get "$meta" window)
+  if [ -z "$backend" ]; then
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no backend"
+    return 1
+  fi
+  if ! fm_backend_is_known "$backend"; then
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names unknown backend '$backend'"
+    return 1
+  fi
+  if [ -z "$target" ]; then
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id on backend '$backend' names no target"
+    return 1
+  fi
+  case "$window" in
+    "remote:$id") ;;
+    "$target") ;;
+    '')
+      FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no window sentinel"
+      return 1
+      ;;
+    *)
+      FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names window '$window' that disagrees with its remote target '$target'"
+      return 1
+      ;;
+  esac
+  if [ "$backend" = herdr ]; then
+    case "$target" in
+      *:?*) ;;
+      *)
+        FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names malformed target '$target'"
+        return 1
+        ;;
+    esac
+    session=$(fm_meta_get "$meta" remote_herdr_session)
+    if [ -n "$session" ] && [ "${target%%:*}" != "$session" ]; then
+      # shellcheck disable=SC2034 # Output global is consumed by sourcing callers.
+      FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names target '$target' outside its recorded session '$session'"
+      return 1
+    fi
+  fi
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_REMOTE_BACKEND=$backend
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_REMOTE_TARGET=$target
+  return 0
+}
+
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely
 # from its durable metadata before any runtime command or cleanup mutation.
 # The validation binds the exact task id, selected backend, target, project,

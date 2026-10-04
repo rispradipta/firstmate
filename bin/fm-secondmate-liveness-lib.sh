@@ -139,6 +139,13 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
   harness=$(fm_meta_get "$meta" harness)
   remote_host=$(fm_meta_get "$meta" remote_host)
   if [ -n "$remote_host" ]; then
+    # The parent record's endpoint fields must agree before probing: a drifted
+    # record is reported as drift, never routed as a state read whose failure
+    # would look like an unreachable (or dead) endpoint.
+    if ! fm_backend_remote_endpoint_of_meta "$meta" "$id"; then
+      FM_SM_LIVE_REASON="remote endpoint record mismatch: $FM_BACKEND_REMOTE_DIAGNOSIS"
+      return 0
+    fi
     if [ "$mode" = full ]; then
       remote_rc=0
       fm_remote_readiness_ensure "$FM_SM_LIVE_LIB_DIR" "$id" || remote_rc=$?

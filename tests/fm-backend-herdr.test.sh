@@ -3990,6 +3990,40 @@ test_composer_state_pi_dollar_status_footer_is_empty() {
   pass "fm_backend_herdr_composer_state: a dollar-first Pi status footer reads empty, not a dead shell"
 }
 
+test_composer_state_pi_transient_identity_failure_reaches_empty() {
+  # A single failed `agent get` must not turn a genuinely idle Pi pane into a
+  # false `unknown`: the bounded identity retry re-probes and the empty pair
+  # still reaches its determinate `empty` verdict. This is the remote-mate
+  # restart defect: an idle pane read unknown, so the guarded /quit exit
+  # refused and /updatefirstmate reported the mate unreached.
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-pi-identity-retry"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n\x1b[0m\x1b[7m \x1b[0m                                                    \n\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n' > "$resp/1.out"
+  printf '1\n' > "$resp/2.exit"
+  printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_IDENTITY_PROBE_SLEEP=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state lab:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "an idle Pi pane with a transient identity-probe miss should still read empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: a transient identity-probe failure on an idle Pi pane still reaches empty"
+}
+
+test_composer_state_pi_transient_identity_failure_keeps_pending() {
+  # The retry must not relax the non-empty refusal: real text in the Pi
+  # composer still reads pending even when the identity probe needed a retry,
+  # so the guard never types onto existing text.
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-pi-identity-retry-pending"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\nprivacy safe human draft\x1b[7m \x1b[0m\n\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n' > "$resp/1.out"
+  printf '1\n' > "$resp/2.exit"
+  printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_IDENTITY_PROBE_SLEEP=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state lab:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "real text in a Pi composer must stay pending across an identity retry, got '$out'"
+  pass "fm_backend_herdr_composer_state: real Pi composer text stays pending across a transient identity-probe miss"
+}
+
 # A pi worker parked on an interactive prompt (permission dialog, question
 # menu, trust dialog) reports agent_status=blocked: it is waiting on a human
 # keystroke. The menu is drawn ABOVE the separator pair, so the composer region
@@ -5929,6 +5963,8 @@ test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found
 test_composer_state_pi_parked_prompt_is_not_empty
 test_composer_state_pi_separator_idle_is_empty
+test_composer_state_pi_transient_identity_failure_reaches_empty
+test_composer_state_pi_transient_identity_failure_keeps_pending
 test_composer_state_pi_dollar_status_footer_is_empty
 test_composer_state_pi_separator_real_text_is_pending
 test_composer_state_pi_incomplete_separator_below_stale_generic_is_unknown

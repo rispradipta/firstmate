@@ -3174,6 +3174,35 @@ fm_backend_herdr_composer_identity() {  # <target> -> "<agent>\t<status>"
   fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
 }
 
+# fm_backend_herdr_composer_identity_retry: the native identity probe with a
+# small bounded retry. The shared pi verdict proves an empty composer only from
+# a live idle/done identity, so a single failed `agent get` - a registration
+# momentarily absent while a Pi pane is between session reports - would turn a
+# genuinely idle pane into a false `unknown` and refuse every restart of an
+# idle remote mate. Retries are bounded and close together; a probe that stays
+# unavailable returns nonzero so the caller keeps its fail-closed verdict.
+# An identity whose agent field is empty is treated as unavailable too, so the
+# retry cannot mistake a malformed registration for a usable one.
+#   FM_COMPOSER_IDENTITY_PROBE_ATTEMPTS  probe attempts (3)
+#   FM_COMPOSER_IDENTITY_PROBE_SLEEP     seconds between attempts (0.2)
+fm_backend_herdr_composer_identity_retry() {  # <target>
+  local target=$1 attempts i=0 out
+  attempts=${FM_COMPOSER_IDENTITY_PROBE_ATTEMPTS:-3}
+  case "$attempts" in ''|*[!0-9]*|0) attempts=3 ;; esac
+  while [ "$i" -lt "$attempts" ]; do
+    if out=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null); then
+      case "${out%%$'\t'*}" in
+        '') ;;
+        *) printf '%s' "$out"; return 0 ;;
+      esac
+    fi
+    i=$((i + 1))
+    [ "$i" -lt "$attempts" ] || break
+    sleep "${FM_COMPOSER_IDENTITY_PROBE_SLEEP:-0.2}"
+  done
+  return 1
+}
+
 # fm_backend_herdr_composer_state: thin adapter - capture plus capabilities
 # in, shared verdict out. The ANSI capture is preferred (styled=1 lets the
 # shared classifier strip ghost/placeholder text); when it fails on an older
@@ -3204,7 +3233,9 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unprove
   fi
   verdict=$(fm_composer_classify_screen "$caps" "$cap")
   if [ "$verdict" = need-identity ]; then
-    if ! identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null) || [ -z "$identity" ]; then
+    if identity=$(fm_backend_herdr_composer_identity_retry "$target" 2>/dev/null) && [ -n "$identity" ]; then
+      :
+    else
       identity='probe-absent'
     fi
     verdict=$(fm_composer_classify_screen "$caps" "$cap" '' "$identity")

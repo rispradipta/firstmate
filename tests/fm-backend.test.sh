@@ -610,6 +610,69 @@ test_meta_get_and_backend_of_meta() {
   pass "fm_meta_get / fm_backend_of_meta: read last key=value and default backend to tmux"
 }
 
+# A remote second mate's parent record deliberately keeps `window=remote:<id>` as
+# a local sentinel while the real endpoint lives on its own host. This is the
+# one owner of that sentinel's meaning: a reader resolves the recorded remote
+# backend and target, and a record whose own endpoint fields disagree is
+# reported as drift rather than read as a local endpoint that happens to be
+# absent.
+test_remote_endpoint_of_meta_agreement() {
+  local consistent drifted missing_target bad_session unknown_backend local_meta rc
+  consistent=$TMP_ROOT/remote-endpoint-ok.meta
+  drifted=$TMP_ROOT/remote-endpoint-drift.meta
+  missing_target=$TMP_ROOT/remote-endpoint-no-target.meta
+  bad_session=$TMP_ROOT/remote-endpoint-bad-session.meta
+  unknown_backend=$TMP_ROOT/remote-endpoint-unknown-backend.meta
+  local_meta=$TMP_ROOT/remote-endpoint-local.meta
+  fm_write_meta "$consistent" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_root=/remote/root" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=fm-remote:w1:p1"
+  rc=0; fm_backend_remote_endpoint_of_meta "$consistent" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "a consistent remote record should resolve, got rc=$rc: $FM_BACKEND_REMOTE_DIAGNOSIS"
+  [ "$FM_BACKEND_REMOTE_BACKEND" = herdr ] || fail "the remote backend should resolve to herdr"
+  [ "$FM_BACKEND_REMOTE_TARGET" = fm-remote:w1:p1 ] || fail "the remote target should resolve to the recorded target"
+
+  fm_write_meta "$drifted" \
+    "window=remote:other" "remote_host=remote-mac" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=fm-remote:w1:p1"
+  rc=0; fm_backend_remote_endpoint_of_meta "$drifted" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a window/target disagreement should be reported as drift, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *disagrees*) : ;;
+    *) fail "the drift diagnosis should name the disagreement, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$missing_target" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_backend=herdr" "remote_herdr_session=fm-remote"
+  rc=0; fm_backend_remote_endpoint_of_meta "$missing_target" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a remote record with no target should be reported as drift, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *'no target'*) : ;;
+    *) fail "the missing-target diagnosis should say so, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$bad_session" \
+    "window=other-session:w1:p1" "remote_host=remote-mac" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=other-session:w1:p1"
+  rc=0; fm_backend_remote_endpoint_of_meta "$bad_session" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a target outside the recorded session should be reported as drift, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *'outside its recorded session'*) : ;;
+    *) fail "the session diagnosis should name the session, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$unknown_backend" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_backend=vaporware" "remote_target=vaporware:w1:p1"
+  rc=0; fm_backend_remote_endpoint_of_meta "$unknown_backend" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "an unknown remote backend should be reported as drift, got rc=$rc"
+
+  fm_write_meta "$local_meta" "window=firstmate:fm-x1" "endpoint_task_id=x1"
+  rc=0; fm_backend_remote_endpoint_of_meta "$local_meta" x1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "a local record must not be treated as remote, got rc=$rc"
+
+  pass "fm_backend_remote_endpoint_of_meta: the reader resolves the real remote endpoint and reports record drift"
+}
+
 test_resolve_selector_three_forms() {
   local state=$TMP_ROOT/resolve-state fakebin out
   mkdir -p "$state"
@@ -1227,6 +1290,7 @@ test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
+test_remote_endpoint_of_meta_agreement
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract

@@ -631,6 +631,7 @@ It hands the visible pane's ANSI viewport plus Herdr's capability facts to the f
 A blocked Pi is parked on an interactive prompt, so its blank composer region is a menu's and not a free composer's.
 That state defers instead of proving emptiness.
 A working Pi, pending middle row, missing identity, incomplete separator pair, or over-tall candidate remains unknown or pending.
+`fm_backend_herdr_composer_state` re-probes the native identity a bounded number of times before treating it as missing, so a registration momentarily absent while the pane is between session reports cannot turn a genuinely idle composer into a false unknown, while a probe that stays unavailable still defers.
 Identity stays a lazy second read, consulted only when a separator pair could change the verdict.
 
 ### Placeholder and ghost text
