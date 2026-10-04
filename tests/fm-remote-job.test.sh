@@ -424,6 +424,7 @@ READY_OTHER_PID=$!
 printf '%s %s\n' "$READY_OTHER_PID" 'not-the-owner' > "$READY_STATE/worker.ready"
 ( FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; fm_remote_job_probe "$READY_HOME" ) \
   && fail "the probe accepted a fresh heartbeat from a non-owner"
+# shellcheck disable=SC2030,SC2031 # The cadence fixture's PATH change stayed in its subshell.
 ( PATH="$FAST_SLEEP_BIN:$PATH" FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; \
   fm_remote_job_wait_for_probe "$REMOTE_ROOT" "$READY_HOME" ) \
   && fail "the readiness handshake accepted a heartbeat from a non-owner"
