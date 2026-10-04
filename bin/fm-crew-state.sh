@@ -281,11 +281,12 @@ LOG_VERB=$(status_line_verb "$LOG_LINE")
 # the endpoint is actually gone.
 if [ -n "$REMOTE_HOST" ]; then
   # A remote mate's parent record deliberately carries a local sentinel
-  # (`window=remote:<id>`) beside the real host-local endpoint. Prove the
-  # record's own endpoint fields agree before any read: a drifted or legacy
-  # record must be reported as record drift, never read as a local endpoint
-  # that happens to be absent (which would read as a dead mate).
-  if ! fm_backend_remote_endpoint_of_meta "$META" "$ID"; then
+  # (`window=remote:<id>`) beside the host-local endpoint. Report only a real
+  # contradiction in those markers before any read: a tolerated or incomplete
+  # record still routes to its host (the authoritative record lives there),
+  # while a contradictory one is named as record drift instead of being read as
+  # a dead local endpoint.
+  if ! fm_backend_remote_endpoint_drift "$META" "$ID"; then
     emit unknown remote-endpoint "endpoint record mismatch: $FM_BACKEND_REMOTE_DIAGNOSIS"
   fi
   if ! REMOTE_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$ID" \
@@ -307,7 +308,7 @@ if [ -n "$REMOTE_HOST" ]; then
       emit unknown remote-endpoint "remote endpoint $REMOTE_STATE on $REMOTE_HOST"
       ;;
     '')
-      emit unknown remote-endpoint "unknown-remote: $REMOTE_HOST unreachable or endpoint unreadable (not proof of death)"
+      emit unknown remote-endpoint "unknown-remote: $REMOTE_HOST unreachable or endpoint unreadable (not proof of death)${FM_BACKEND_REMOTE_DIAGNOSIS:+; $FM_BACKEND_REMOTE_DIAGNOSIS}"
       ;;
     *)
       emit unknown remote-endpoint "unknown-remote: endpoint state '$REMOTE_STATE' on $REMOTE_HOST (not proof of death)"

@@ -3295,6 +3295,30 @@ test_remote_record_drift_is_self_diagnosing() {
   pass "fm-crew-state remote: an inconsistent endpoint record is self-diagnosing, not a dead mate"
 }
 
+# The complement of the drift case: a legacy or incomplete marker set must not
+# block the read. The host-local record is authoritative, so an alive host
+# answer still reads alive even when the parent markers are absent.
+test_remote_incomplete_markers_still_read() {
+  reset_fakes
+  local d out rc
+  d=$(setup_remote_case remote-incomplete-markers)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/rsm.meta" \
+    "window=firstmate:fm-rsm" \
+    "endpoint_task_id=rsm" \
+    "worktree=/remote/home/never-locally-present" \
+    "harness=claude" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "remote_host=remote-mac" \
+    "remote_root=/remote/root"
+  out=$(FM_FAKE_REMOTE_STATE_OUT=alive FM_FAKE_SSH_RC=0 run_remote_crew_state "$d" rsm); rc=$?
+  expect_code 0 "$rc" "a tolerated remote record still exits 0"
+  assert_contains "$out" "alive on remote-mac" "an incomplete marker set must still resolve through its host"
+  assert_not_contains "$out" "endpoint record mismatch" "a tolerated record must not be reported as drift"
+  pass "fm-crew-state remote: an incomplete or legacy marker set still reads through its host"
+}
+
 test_missing_meta() {
   reset_fakes
   local d; d=$(new_case nometa)
@@ -5640,6 +5664,7 @@ test_remote_alive_idle_is_healthy_not_gone
 test_remote_unreachable_is_unknown_remote_not_dead
 test_remote_dead_reports_remote_verdict
 test_remote_record_drift_is_self_diagnosing
+test_remote_incomplete_markers_still_read
 test_missing_meta
 test_provably_working_via_runs_list_fallback
 test_not_provably_working_when_stopped

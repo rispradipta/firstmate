@@ -4001,6 +4001,7 @@ test_composer_state_pi_transient_identity_failure_reaches_empty() {
   printf '\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n\x1b[0m\x1b[7m \x1b[0m                                                    \n\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n' > "$resp/1.out"
   printf '1\n' > "$resp/2.exit"
   printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' > "$resp/3.out"
+  cp "$resp/1.out" "$resp/4.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_IDENTITY_PROBE_SLEEP=0 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state lab:w1:p2' "$ROOT" )
@@ -4017,6 +4018,7 @@ test_composer_state_pi_transient_identity_failure_keeps_pending() {
   printf '\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\nprivacy safe human draft\x1b[7m \x1b[0m\n\x1b[38;2;129;162;190m─────────────────────────────────────────────────────\x1b[0m\n' > "$resp/1.out"
   printf '1\n' > "$resp/2.exit"
   printf '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}\n' > "$resp/3.out"
+  cp "$resp/1.out" "$resp/4.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_COMPOSER_IDENTITY_PROBE_SLEEP=0 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state lab:w1:p2' "$ROOT" )

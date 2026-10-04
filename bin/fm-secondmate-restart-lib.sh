@@ -77,9 +77,11 @@ fm_secondmate_restart_capable() {  # <meta-file>
   if [ -n "$remote_host" ]; then
     FM_SECONDMATE_RESTART_PLACEMENT=remote
     FM_SECONDMATE_RESTART_HOST=$remote_host
-    # A record whose own endpoint fields disagree is drift, not a restartable
-    # mate: report the exact defect so it is repaired rather than retried.
-    if ! fm_backend_remote_endpoint_of_meta "$meta" "$id"; then
+    # A real contradiction in the record's endpoint markers is drift, not a
+    # restartable mate: report the exact defect so it is repaired rather than
+    # retried. An incomplete or legacy marker set is tolerated and restarted
+    # through its host, exactly as before this marker check existed.
+    if ! fm_backend_remote_endpoint_drift "$meta" "$id"; then
       FM_SECONDMATE_RESTART_PLACEMENT=""
       FM_SECONDMATE_RESTART_REASON="remote endpoint record mismatch: $FM_BACKEND_REMOTE_DIAGNOSIS"
       return 1

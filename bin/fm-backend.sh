@@ -362,86 +362,59 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
-# fm_backend_meta_is_remote: 0 when a task record names a remote placement.
-# This is the single owner of that signal; the whole endpoint contract hangs
-# off it (fm-send.sh, fm-crew-state.sh, and fm-peek.sh route on it).
-fm_backend_meta_is_remote() {  # <meta-file>
-  [ -n "$(fm_meta_get "$1" remote_host)" ]
-}
-
-# fm_backend_remote_endpoint_of_meta: resolve the endpoint a READER must use for
-# a remotely placed task, and prove the record's own endpoint fields agree with
-# each other before any reader acts on them.
+# fm_backend_remote_endpoint_drift: the one owner of a remote record's
+# `window=remote:<id>` sentinel and its endpoint markers.
 #
-# A remote secondmate deliberately records `window=remote:<id>` as a local
-# sentinel: its real endpoint lives on another host, named by `remote_backend=`
-# and `remote_target=` (bin/fm-spawn.sh's spawn_remote_secondmate). Reading that
-# sentinel as a local backend target is what makes a live mate report dead, so
-# this is the one owner of the sentinel's meaning for readers. A record whose
-# own fields disagree is reported as drift with its exact defect rather than
-# silently falling through to the sentinel.
-#
-# Sets, on success:
-#   FM_BACKEND_REMOTE_BACKEND     the backend on the mate's own host
-#   FM_BACKEND_REMOTE_TARGET      the endpoint on that backend
-# On an inconsistent record sets FM_BACKEND_REMOTE_DIAGNOSIS to one
-# operator-readable line and returns 1. Returns 2, setting nothing else, when
-# <meta-file> is not a remote placement.
-FM_BACKEND_REMOTE_BACKEND=
-FM_BACKEND_REMOTE_TARGET=
-FM_BACKEND_REMOTE_DIAGNOSIS=
-fm_backend_remote_endpoint_of_meta() {  # <meta-file> <task-id>
+# A remote secondmate's authoritative endpoint lives on its own host, in that
+# home's own endpoint record; the parent-side `remote_backend=`,
+# `remote_target=`, and `window=remote:<id>` are advisory markers that let a
+# host-routed reader describe the route, not the read itself. So this validator
+# reports rather than invalidates:
+#   - 0, setting FM_BACKEND_REMOTE_DIAGNOSIS to a one-line note when the markers
+#     are absent or incomplete. Callers keep reading through the host and must
+#     not refuse a shape that was valid before those markers existed.
+#   - 1 only on a real contradiction, when markers are present but disagree
+#     with each other: a `window=` outside the `remote:<id>` sentinel that is
+#     not the recorded `remote_target=`, a malformed Herdr target, or a Herdr
+#     target outside the recorded `remote_herdr_session=`. The diagnosis names
+#     the exact contradiction.
+# A non-remote record returns 0 with an empty diagnosis.
+fm_backend_remote_endpoint_drift() {  # <meta-file> <task-id>
   local meta=$1 id=$2 backend target window session
-  FM_BACKEND_REMOTE_BACKEND=
-  FM_BACKEND_REMOTE_TARGET=
   FM_BACKEND_REMOTE_DIAGNOSIS=
-  fm_backend_meta_is_remote "$meta" || return 2
+  [ -n "$(fm_meta_get "$meta" remote_host)" ] || return 0
   backend=$(fm_meta_get "$meta" remote_backend)
   target=$(fm_meta_get "$meta" remote_target)
   window=$(fm_meta_get "$meta" window)
-  if [ -z "$backend" ]; then
-    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no backend"
-    return 1
-  fi
-  if ! fm_backend_is_known "$backend"; then
-    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names unknown backend '$backend'"
-    return 1
-  fi
-  if [ -z "$target" ]; then
-    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id on backend '$backend' names no target"
-    return 1
-  fi
-  case "$window" in
-    "remote:$id") ;;
-    "$target") ;;
-    '')
-      FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no window sentinel"
-      return 1
-      ;;
-    *)
-      FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names window '$window' that disagrees with its remote target '$target'"
-      return 1
-      ;;
-  esac
-  if [ "$backend" = herdr ]; then
-    case "$target" in
-      *:?*) ;;
+  session=$(fm_meta_get "$meta" remote_herdr_session)
+  if [ -n "$target" ]; then
+    case "$window" in
+      ''|"remote:$id"|"$target") ;;
       *)
-        FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names malformed target '$target'"
+        FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names window '$window' that disagrees with its remote target '$target'"
         return 1
         ;;
     esac
-    session=$(fm_meta_get "$meta" remote_herdr_session)
-    if [ -n "$session" ] && [ "${target%%:*}" != "$session" ]; then
-      # shellcheck disable=SC2034 # Output global is consumed by sourcing callers.
-      FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names target '$target' outside its recorded session '$session'"
-      return 1
+    if [ "$backend" = herdr ]; then
+      case "$target" in
+        *:?*) ;;
+        *)
+          FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names malformed target '$target'"
+          return 1
+          ;;
+      esac
+      if [ -n "$session" ] && [ "${target%%:*}" != "$session" ]; then
+        FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names target '$target' outside its recorded session '$session'"
+        return 1
+      fi
     fi
   fi
-  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
-  FM_BACKEND_REMOTE_BACKEND=$backend
-  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
-  FM_BACKEND_REMOTE_TARGET=$target
+  if [ -z "$backend" ]; then
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no backend; reading through its host anyway"
+  elif [ -z "$target" ]; then
+    # shellcheck disable=SC2034 # Published to sourcing callers.
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no target; reading through its host anyway"
+  fi
   return 0
 }
 

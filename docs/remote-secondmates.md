@@ -494,8 +494,9 @@ A fire-and-forget record, such as a reconcile ask, gets its single retry ring on
 
 `fm-peek.sh` and `fm-crew-state.sh` route remote-secondmate reads to the endpoint's host instead of consulting local worktree or backend state.
 An unreachable or unreadable remote read is unknown, not evidence that the endpoint is dead.
-A remote record keeps `window=remote:<id>` only as a local sentinel beside the real `remote_target=`; `bin/fm-backend.sh`'s `fm_backend_remote_endpoint_of_meta` is the one owner of that sentinel's meaning.
-A record whose own endpoint fields disagree is reported as record drift by `fm-crew-state.sh`, `fm-peek.sh`, and the secondmate liveness and restart gates, never read through the sentinel as a dead local endpoint.
+A remote record keeps `window=remote:<id>` only as a local sentinel beside the host-local endpoint; `bin/fm-backend.sh`'s `fm_backend_remote_endpoint_drift` is the one owner of that sentinel's meaning.
+An incomplete or legacy marker set is tolerated: the read still routes to the host and the drift is noted rather than refused.
+Only a real contradiction between the parent markers - a `window=` outside the sentinel that disagrees with `remote_target=`, a malformed Herdr target, or a Herdr target outside its recorded session - is reported as record drift by `fm-crew-state.sh`, `fm-peek.sh`, and the secondmate liveness and restart gates, never read through the sentinel as a dead local endpoint.
 
 ### Replies and the parent channel
 
