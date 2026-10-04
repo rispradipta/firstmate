@@ -36,6 +36,8 @@ CONVERGE_STATE=
 KILLED_OWNER_STATES=()
 REUSED_PID=
 ZOMBIE_PARENT=
+RECOGNIZED_STATE=
+RECOGNIZED_PGID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # Collapses wait_for_probe's bounded retry cadence so its negative case is
 # exercised without paying the whole 20-second window in the suite.
@@ -62,7 +64,8 @@ cleanup_remote_job_fixture() {
   [ -z "$PEER_LANE_GROUP" ] || kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
   [ -z "$REUSED_PID" ] || kill -KILL "$REUSED_PID" 2>/dev/null || true
   [ -z "$ZOMBIE_PARENT" ] || kill -KILL "$ZOMBIE_PARENT" 2>/dev/null || true
-  for leftover_state in "$CONVERGE_STATE" "${KILLED_OWNER_STATES[@]:-}"; do
+  [ -z "$RECOGNIZED_PGID" ] || kill -KILL -- "-$RECOGNIZED_PGID" 2>/dev/null || true
+  for leftover_state in "$CONVERGE_STATE" "$RECOGNIZED_STATE" "${KILLED_OWNER_STATES[@]:-}"; do
     [ -n "$leftover_state" ] || continue
     [ -f "$leftover_state/worker.pid" ] || continue
     kill -KILL "$(cat "$leftover_state/worker.pid")" 2>/dev/null || true
@@ -524,6 +527,47 @@ CV_SERVES=$(pgrep -fc "$CONVERGE_ROOT/bin/fm-remote-job-worker.sh --serve" || tr
   fm_remote_job_worker_identity_matches "$CONVERGE_ROOT" "$CONVERGE_HOME" ) \
   || fail "the converged worker did not publish the matching identity"
 pass "ensure replaces an unrecognized live worker instead of accumulating"
+
+# A live, recognized owner whose heartbeat is momentarily stale (it is busy in
+# one long pass) must not be tree-killed. Only a genuinely unrecognized owner
+# may be replaced, so ensure must leave the frozen-but-recognized owner alone
+# rather than stopping its tree and starting a second worker beside it.
+RECOGNIZED_ROOT="$TMP_ROOT/recognized-root"
+RECOGNIZED_HOME="$TMP_ROOT/recognized-account"
+RECOGNIZED_STATE="$TMP_ROOT/recognized-state"
+cp -R "$REMOTE_ROOT" "$RECOGNIZED_ROOT"
+mkdir -p "$RECOGNIZED_HOME"
+chmod 700 "$RECOGNIZED_HOME"
+( FM_REMOTE_JOB_STATE_ROOT="$RECOGNIZED_STATE"; fm_remote_job_ensure_worker "$RECOGNIZED_ROOT" "$RECOGNIZED_HOME" ) \
+  || fail "the recognized-unready fixture worker did not start"
+RECOGNIZED_PID=$(cat "$RECOGNIZED_STATE/worker.pid")
+RECOGNIZED_PGID=$(fm_remote_job_process_pgid "$RECOGNIZED_PID" 2>/dev/null || true)
+kill -STOP "$RECOGNIZED_PID"
+for _ in $(seq 1 100); do
+  [ "$(ps -o state= -p "$RECOGNIZED_PID" 2>/dev/null | cut -c1)" = T ] && break
+  sleep 0.05
+done
+[ "$(ps -o state= -p "$RECOGNIZED_PID" 2>/dev/null | cut -c1)" = T ] \
+  || fail "the recognized-unready fixture worker did not stop"
+touch -t 200001010000 "$RECOGNIZED_STATE/worker.ready"
+( FM_REMOTE_JOB_STATE_ROOT="$RECOGNIZED_STATE"; fm_remote_job_worker_owned_alive "$RECOGNIZED_ROOT" "$RECOGNIZED_HOME" ) \
+  && fail "a stale heartbeat reported the recognized owner ready"
+( FM_REMOTE_JOB_STATE_ROOT="$RECOGNIZED_STATE"; fm_remote_job_lock_owner_matches_process "$RECOGNIZED_HOME" ) \
+  || fail "the frozen owner's lock record no longer matched the live process"
+( FM_REMOTE_JOB_STATE_ROOT="$RECOGNIZED_STATE"; fm_remote_job_start_linux_worker "$RECOGNIZED_ROOT" "$RECOGNIZED_HOME" ) \
+  || fail "ensure failed against a recognized unready owner"
+kill -0 "$RECOGNIZED_PID" 2>/dev/null \
+  || fail "ensure tree-killed a recognized owner for a momentarily stale heartbeat"
+[ "$(cat "$RECOGNIZED_STATE/worker.pid")" = "$RECOGNIZED_PID" ] \
+  || fail "ensure started a second worker beside a recognized unready owner"
+RECOGNIZED_SERVES=$(pgrep -fc "$RECOGNIZED_ROOT/bin/fm-remote-job-worker.sh --serve" || true)
+[ "$RECOGNIZED_SERVES" -eq 1 ] \
+  || fail "ensure left $RECOGNIZED_SERVES serving workers beside a recognized unready owner"
+case "$RECOGNIZED_PGID" in ''|*[!0-9]*) kill -KILL "$RECOGNIZED_PID" 2>/dev/null || true ;; *) kill -KILL -- "-$RECOGNIZED_PGID" 2>/dev/null || true ;; esac
+wait "$RECOGNIZED_PID" 2>/dev/null || true
+RECOGNIZED_PID=
+RECOGNIZED_PGID=
+pass "ensure never tree-kills a live recognized owner for a stale heartbeat"
 
 # A SIGKILLed owner leaves its lock records, its worker.pid, and a still-fresh
 # heartbeat behind, because no shutdown handler runs to clear them. ensure must

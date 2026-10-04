@@ -1359,6 +1359,9 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
     wait "$pid" 2>/dev/null || true
     FM_REMOTE_JOB_REPAIRED=1
   else
+    if fm_remote_job_lock_owner_matches_process "$account_home"; then
+      return 0
+    fi
     fm_remote_job_replace_unrecognized_linux_worker "$root" "$account_home" || return 1
     FM_REMOTE_JOB_REPAIRED=1
   fi
