@@ -29,10 +29,13 @@
 # for that quiet scan. Newly staged or cancelled work, a lane that died, an
 # orphaned claim, or an expired queue deadline can wait that interval plus
 # scan work and scheduling time. It refreshes the readiness heartbeat about once
-# per second, far inside the probe's 10-second freshness bound. The stale
-# sweep, whose state preparation also re-applies the queue directories' 0700
-# modes, runs at startup and then at most every 60 seconds, never more rarely
-# than the shortest record reap age.
+# per second, far inside the probe's 10-second freshness bound. Each heartbeat
+# names this loop's pid and clock-step-proof start token, and the loop re-checks
+# that it still owns its lock before publishing: an ownership lost to a
+# replacement stops this loop's own tree and exits instead of publishing false
+# readiness. The stale sweep, whose state preparation also re-applies the queue
+# directories' 0700 modes, runs at startup and then at most every 60 seconds,
+# never more rarely than the shortest record reap age.
 #
 # The worker is abandoned when its configured FM_ROOT stops being a genuine
 # Firstmate checkout - the state a pruned no-mistakes gate worktree, a returned
@@ -75,6 +78,8 @@ FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}
 WORKER_LOCK=
 WORKER_LOCK_HELD=0
 WORKER_LOCK_BOUND=
+WORKER_OWNER_PID=
+WORKER_OWNER_TOKEN=
 WORKER_RELEASE_OWNERSHIP=1
 WORKER_SUPERVISED_PID=
 WORKER_PREEMPTIBLE=0
@@ -97,11 +102,15 @@ worker_account_home() {
   CDPATH='' cd ~ 2>/dev/null && pwd -P
 }
 
+# The heartbeat names this serving loop's pid and its clock-step-proof start
+# token, so a reader can prove the heartbeat belongs to the process that holds
+# the ownership lock. A superseded loop's heartbeat therefore cannot satisfy
+# readiness even before the loop next checks its own ownership.
 worker_write_heartbeat() {
   local ready tmp
   ready=$(fm_remote_job_worker_ready_path)
   tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.ready.XXXXXX") || return 1
-  printf '%s\n' "${BASHPID:-$$}" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  printf '%s %s\n' "$WORKER_OWNER_PID" "$WORKER_OWNER_TOKEN" > "$tmp" || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$ready"
 }
@@ -127,8 +136,8 @@ worker_publish_identity() {
 
 worker_publish_lock_owner() {
   local pid start command pid_tmp start_tmp command_tmp
-  pid=${BASHPID:-$$}
-  start=$(fm_remote_job_process_start "$pid") || return 1
+  pid=$WORKER_OWNER_PID
+  start=$WORKER_OWNER_TOKEN
   command=$(fm_remote_job_process_command "$pid") || return 1
   pid_tmp=$(umask 077; mktemp "$WORKER_LOCK/.pid.XXXXXX") || return 1
   start_tmp=$(umask 077; mktemp "$WORKER_LOCK/.start.XXXXXX") || { rm -f -- "$pid_tmp"; return 1; }
@@ -258,15 +267,19 @@ worker_clear_quarantine() {
 }
 
 # True only while this process still owns the lock directory it published.
-# A missing directory, or a directory whose pid is not this process, belongs
-# to a replacement or to nobody. Shutdown must not remove it or signal work
-# recorded only under that replacement.
+# A missing directory, or one whose pid and start token are not this process's,
+# belongs to a replacement or to nobody. Comparing the start token as well as
+# the pid keeps the answer stable when the wall clock steps, which on the WSL2
+# host made a live owner read as a stranger. Shutdown must not remove a
+# replacement's directory or signal work recorded only under it.
 worker_shutdown_owns_lock() {
-  local owner_pid
+  local owner_pid owner_start
   [ "$WORKER_LOCK_HELD" -eq 1 ] || return 1
   [ -d "$WORKER_LOCK" ] && [ ! -L "$WORKER_LOCK" ] || return 1
   owner_pid=$(fm_remote_job_read_single_line "$WORKER_LOCK/pid" 64 2>/dev/null || true)
-  [ "$owner_pid" = "${BASHPID:-$$}" ]
+  [ "$owner_pid" = "$WORKER_OWNER_PID" ] || return 1
+  owner_start=$(fm_remote_job_read_single_line "$WORKER_LOCK/start" 256 2>/dev/null || true)
+  [ "$owner_start" = "$WORKER_OWNER_TOKEN" ]
 }
 
 worker_cleanup() {
@@ -589,6 +602,27 @@ worker_clear_dead_claim() { # <job-dir>
   rmdir "$claim"
 }
 
+# True when the claim's recorded supervisor is a live lane process whose
+# parent is a live serving loop. That job belongs to the peer loop right now,
+# so reclaiming it would destroy the peer's in-flight work and publish a false
+# unknown-completion result. A lane orphaned by a crashed serving loop has been
+# reparented, so its supervisor is still live but its parent is no longer a
+# worker serve process - exactly the shape that must be reclaimed.
+worker_claim_supervisor_live_peer() { # <job-dir>
+  local job=$1 file="$1/.claim/supervisor" pid ppid command
+  [ -e "$file" ] && [ ! -L "$file" ] || return 1
+  pid=$(worker_read_process_id "$file") || return 1
+  worker_recorded_execution_alive "$job" process "$pid" || return 1
+  ppid=$(fm_remote_job_process_ppid "$pid" 2>/dev/null || true)
+  case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ppid" -gt 1 ] || return 1
+  command=$(fm_remote_job_process_command "$ppid" 2>/dev/null || true)
+  case "$command" in
+    *fm-remote-job-worker.sh*--serve*) return 0 ;;
+  esac
+  return 1
+}
+
 # Reclaim a running job this serving loop does not own: a record left by a
 # crashed worker, whether its lane process died with it or survived it. The
 # recorded execution is stopped either way - a surviving foreign lane is not
@@ -597,6 +631,7 @@ worker_clear_dead_claim() { # <job-dir>
 # crashed single-process worker's job always has.
 worker_reclaim_running_job() { # <job-dir>
   local job=$1 file state
+  worker_claim_supervisor_live_peer "$job" && return 1
   worker_stop_recorded_execution "$job" || return 1
   state=$(fm_remote_job_read_state "$job" 2>/dev/null) || return 1
   worker_clear_dead_claim "$job" || return 1
@@ -1164,6 +1199,9 @@ main() {
   [ -f "$FM_ROOT/AGENTS.md" ] && [ ! -L "$FM_ROOT/AGENTS.md" ] || { worker_error "FM_ROOT is not a Firstmate checkout"; exit 1; }
   fm_remote_job_prepare_state "$account_home" || { worker_error "$FM_REMOTE_JOB_ERROR"; exit 1; }
   WORKER_LOCK=$(fm_remote_job_worker_lock_path)
+  WORKER_OWNER_PID=${BASHPID:-$$}
+  WORKER_OWNER_TOKEN=$(fm_remote_job_process_start "$WORKER_OWNER_PID") \
+    || { worker_error "cannot establish worker ownership identity"; exit 1; }
   trap worker_exit_cleanup EXIT
   worker_acquire_lock "$account_home"
   lock_status=$?
@@ -1183,6 +1221,16 @@ main() {
   WORKER_FAST_REMAINING=0
   WORKER_ACTIVITY=1
   while :; do
+    # Ownership can be lost with no signal: a replacement removes and recreates
+    # the lock path, or stale state is cleared under a running loop. Continuing
+    # to serve would keep publishing a false readiness heartbeat and let a
+    # second loop reclaim this loop's jobs. Check before every heartbeat, and on
+    # loss stop only this loop's own execution without touching the lock a
+    # replacement may now own.
+    if ! worker_shutdown_owns_lock; then
+      worker_error "lost remote job worker ownership; stopping this serving loop"
+      worker_exit_lost_lock
+    fi
     if [ "$SECONDS" -ne "$next_heartbeat" ]; then
       worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
       next_heartbeat=$SECONDS

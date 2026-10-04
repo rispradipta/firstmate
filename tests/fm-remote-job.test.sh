@@ -27,7 +27,19 @@ STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
 QUIET_WORKER_PID=
 SCAN_LANE_PID=
+READY_OWNER_WORKER_PID=
+READY_OTHER_PID=
+PEER_LOOP_A_PID=
+PEER_LOOP_B_PID=
+PEER_LANE_GROUP=
+CONVERGE_STATE=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
+# Collapses wait_for_probe's bounded retry cadence so its negative case is
+# exercised without paying the whole 20-second window in the suite.
+FAST_SLEEP_BIN="$TMP_ROOT/fast-sleep-bin"
+mkdir -p "$FAST_SLEEP_BIN"
+printf '#!/bin/sh\nexit 0\n' > "$FAST_SLEEP_BIN/sleep"
+chmod +x "$FAST_SLEEP_BIN/sleep"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
 # tests/fm-remote-job-orphan-reap.test.sh pins. Stop the whole worker tree.
@@ -40,6 +52,17 @@ cleanup_remote_job_fixture() {
   [ -z "$REPLACEMENT_OWNER_PID" ] || kill -KILL "$REPLACEMENT_OWNER_PID" 2>/dev/null || true
   [ -z "$QUIET_WORKER_PID" ] || kill -KILL "$QUIET_WORKER_PID" 2>/dev/null || true
   [ -z "$SCAN_LANE_PID" ] || kill -KILL "$SCAN_LANE_PID" 2>/dev/null || true
+  [ -z "$READY_OWNER_WORKER_PID" ] || kill -KILL "$READY_OWNER_WORKER_PID" 2>/dev/null || true
+  [ -z "$READY_OTHER_PID" ] || kill -KILL "$READY_OTHER_PID" 2>/dev/null || true
+  [ -z "$PEER_LOOP_A_PID" ] || kill -KILL "$PEER_LOOP_A_PID" 2>/dev/null || true
+  [ -z "$PEER_LOOP_B_PID" ] || kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
+  [ -z "$PEER_LANE_GROUP" ] || kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
+  for leftover_state in "$CONVERGE_STATE"; do
+    [ -n "$leftover_state" ] || continue
+    [ -f "$leftover_state/worker.pid" ] || continue
+    kill -KILL "$(cat "$leftover_state/worker.pid")" 2>/dev/null || true
+    fm_remote_job_stop_worker_tree "$(cat "$leftover_state/worker.pid")" 2>/dev/null || true
+  done
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
     [ -n "$stall_pid" ] || continue
@@ -362,6 +385,81 @@ assert_present "$ACTIVE_SIDE_EFFECT" "the active job was interrupted by the conc
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the active readiness job could not be reaped"
 pass "active jobs keep the worker ready for concurrent requests"
 
+# Readiness must be bound to the lock owner. A superseded loop that keeps
+# writing its own fresh heartbeat must not make the worker read as ready while
+# a replacement owns the lock.
+READY_HOME="$TMP_ROOT/ready-owner-account"
+READY_STATE="$TMP_ROOT/ready-owner-jobs"
+mkdir -p "$READY_HOME"
+chmod 700 "$READY_HOME"
+HOME="$READY_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$READY_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/ready-owner.out" 2> "$TMP_ROOT/ready-owner.err" &
+READY_OWNER_WORKER_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$READY_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+assert_present "$READY_STATE/worker.ready" "the readiness-binding worker did not become ready"
+( FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; fm_remote_job_probe "$READY_HOME" ) \
+  || fail "the probe rejected the lock owner's own heartbeat"
+# Freeze the owner so its once-a-second heartbeat cannot race the impostor write.
+kill -STOP "$READY_OWNER_WORKER_PID"
+for _ in $(seq 1 100); do
+  [ "$(ps -o state= -p "$READY_OWNER_WORKER_PID" 2>/dev/null | cut -c1)" = T ] && break
+  sleep 0.05
+done
+[ "$(ps -o state= -p "$READY_OWNER_WORKER_PID" 2>/dev/null | cut -c1)" = T ] \
+  || fail "the readiness-binding worker did not stop"
+sleep 30 &
+READY_OTHER_PID=$!
+printf '%s %s\n' "$READY_OTHER_PID" 'not-the-owner' > "$READY_STATE/worker.ready"
+( FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; fm_remote_job_probe "$READY_HOME" ) \
+  && fail "the probe accepted a fresh heartbeat from a non-owner"
+( PATH="$FAST_SLEEP_BIN:$PATH" FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; \
+  fm_remote_job_wait_for_probe "$REMOTE_ROOT" "$READY_HOME" ) \
+  && fail "the readiness handshake accepted a heartbeat from a non-owner"
+kill "$READY_OTHER_PID" 2>/dev/null || true
+wait "$READY_OTHER_PID" 2>/dev/null || true
+READY_OTHER_PID=
+kill -CONT "$READY_OWNER_WORKER_PID"
+for _ in $(seq 1 100); do
+  ( FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; fm_remote_job_probe "$READY_HOME" ) && break
+  sleep 0.05
+done
+( FM_REMOTE_JOB_STATE_ROOT="$READY_STATE"; fm_remote_job_probe "$READY_HOME" ) \
+  || fail "the probe did not recover the owner's heartbeat after the impostor was removed"
+kill -TERM "$READY_OWNER_WORKER_PID"
+wait "$READY_OWNER_WORKER_PID" 2>/dev/null || true
+READY_OWNER_WORKER_PID=
+pass "readiness is bound to the lock owner, not to heartbeat freshness alone"
+
+# Ownership identity must survive a wall-clock step. On WSL2 the clock steps
+# every ~33 seconds, and the pre-fix ps -o lstart= identity changed under the
+# same step for the very same live process. On Linux the token is the kernel's
+# monotonic starttime, which a step cannot move.
+CLOCK_STATE="$TMP_ROOT/clock-step-state"
+mkdir -p "$CLOCK_STATE/worker.lock" "$CLOCK_STATE/jobs" "$CLOCK_STATE/logs"
+chmod 700 "$CLOCK_STATE" "$CLOCK_STATE/worker.lock" "$CLOCK_STATE/jobs" "$CLOCK_STATE/logs"
+CLOCK_TOKEN=$(fm_remote_job_process_start "$$") || fail "the live shell has no process start token"
+CLOCK_LSTART=$(/bin/ps -p "$$" -o lstart= 2>/dev/null || /usr/bin/ps -p "$$" -o lstart= 2>/dev/null || true)
+printf '%s\n' "$$" > "$CLOCK_STATE/worker.lock/pid"
+printf '%s\n' "$CLOCK_TOKEN" > "$CLOCK_STATE/worker.lock/start"
+fm_remote_job_process_command "$$" > "$CLOCK_STATE/worker.lock/command"
+chmod 600 "$CLOCK_STATE/worker.lock"/*
+( FM_REMOTE_JOB_STATE_ROOT="$CLOCK_STATE"; fm_remote_job_lock_owner_matches_process "$ACCOUNT_HOME" ) \
+  || fail "the clock-step-proof token did not recognize the live owner"
+if [ "$(uname -s)" = Linux ]; then
+  case "$CLOCK_TOKEN" in ''|*[!0-9]*) fail "the Linux ownership token is not the kernel starttime" ;; esac
+  [ "$CLOCK_TOKEN" != "$CLOCK_LSTART" ] \
+    || fail "ownership identity is still the wall-clock lstart string"
+  printf '%s\n' "$CLOCK_LSTART" > "$CLOCK_STATE/worker.lock/start"
+  ( FM_REMOTE_JOB_STATE_ROOT="$CLOCK_STATE"; fm_remote_job_lock_owner_matches_process "$ACCOUNT_HOME" ) \
+    && fail "a wall-clock lstart string was accepted as the ownership identity"
+fi
+rm -rf -- "$CLOCK_STATE"
+pass "ownership identity is a clock-step-proof token, not the wall-clock lstart string"
+
 OLD_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 printf '\n' >> "$REMOTE_ROOT/bin/fm-remote-job-worker.sh"
 fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" \
@@ -391,6 +489,36 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the relocated-root probe c
 fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
 NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 pass "worker identity binds the canonical configured code root"
+
+# ensure_worker must converge, not accumulate. A live worker whose lock record
+# cannot be recognized used to read as absent, so every ensure call started one
+# more supervisor beside it. It must instead replace the whole tree and leave
+# exactly one serving worker.
+CONVERGE_ROOT="$TMP_ROOT/converge-root"
+CONVERGE_HOME="$TMP_ROOT/converge-account"
+CONVERGE_STATE="$TMP_ROOT/converge-state"
+cp -R "$REMOTE_ROOT" "$CONVERGE_ROOT"
+mkdir -p "$CONVERGE_HOME"
+chmod 700 "$CONVERGE_HOME"
+( FM_REMOTE_JOB_STATE_ROOT="$CONVERGE_STATE"; fm_remote_job_ensure_worker "$CONVERGE_ROOT" "$CONVERGE_HOME" ) \
+  || fail "the converge fixture worker did not start"
+CV_OLD=$(cat "$CONVERGE_STATE/worker.pid")
+# Corrupt only the command record, which the serving loop does not re-check, so
+# the worker stays alive and heartbeating while its ownership becomes
+# unrecognizable to a concurrent ensure call.
+printf 'unrecognized\n' > "$CONVERGE_STATE/worker.lock/command"
+kill -0 "$CV_OLD" 2>/dev/null || fail "the converge fixture worker was not alive before replacement"
+( FM_REMOTE_JOB_STATE_ROOT="$CONVERGE_STATE"; fm_remote_job_ensure_worker "$CONVERGE_ROOT" "$CONVERGE_HOME" ) \
+  || fail "ensure did not converge on an unrecognized live worker"
+CV_NEW=$(cat "$CONVERGE_STATE/worker.pid")
+[ "$CV_NEW" != "$CV_OLD" ] || fail "ensure retained the unrecognized worker instead of replacing it"
+kill -0 "$CV_OLD" 2>/dev/null && fail "ensure left the unrecognized worker running beside the replacement"
+CV_SERVES=$(pgrep -fc "$CONVERGE_ROOT/bin/fm-remote-job-worker.sh --serve" || true)
+[ "$CV_SERVES" -eq 1 ] || fail "ensure left $CV_SERVES serving workers instead of one"
+( FM_REMOTE_JOB_STATE_ROOT="$CONVERGE_STATE"; \
+  fm_remote_job_worker_identity_matches "$CONVERGE_ROOT" "$CONVERGE_HOME" ) \
+  || fail "the converged worker did not publish the matching identity"
+pass "ensure replaces an unrecognized live worker instead of accumulating"
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
 kill -KILL "$CRASHED_WORKER_PID"
@@ -605,6 +733,92 @@ assert_absent "$CRASH_SIDE_EFFECT" "an orphaned command mutated after worker cra
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the crash-recovered job could not be reaped"
 fm_remote_job_probe "$ACCOUNT_HOME" || fail "the restarted worker did not remain ready"
 pass "Linux supervision recovers crashes and stops orphaned commands"
+
+# A serving loop must never reclaim (and kill) a running job that a live peer
+# serving loop is supervising. A peer loses its lock only momentarily during a
+# handoff, and its lane is still doing real work; reclaiming it would destroy
+# that work and publish a false unknown-completion result.
+PEER_ROOT="$TMP_ROOT/peer-root"
+PEER_HOME="$TMP_ROOT/peer-account"
+PEER_STATE="$TMP_ROOT/peer-state"
+PEER_STARTED="$TMP_ROOT/peer-started"
+PEER_SIDE_EFFECT="$TMP_ROOT/peer-side-effect"
+cp -R "$REMOTE_ROOT" "$PEER_ROOT"
+mkdir -p "$PEER_HOME"
+chmod 700 "$PEER_HOME"
+cat > "$PEER_ROOT/bin/fm-peer-hold.sh" <<'SH'
+#!/bin/bash
+trap '' HUP INT TERM
+printf 'started\n' > "$1"
+sleep 30
+printf 'ran\n' > "$2"
+SH
+chmod +x "$PEER_ROOT/bin/fm-peer-hold.sh"
+git -C "$PEER_ROOT" add bin/fm-peer-hold.sh
+git -C "$PEER_ROOT" commit -qm 'peer hold job'
+HOME="$PEER_HOME" FM_ROOT_OVERRIDE="$PEER_ROOT" FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$PEER_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/peer-a.out" 2> "$TMP_ROOT/peer-a.err" &
+PEER_LOOP_A_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$PEER_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+assert_present "$PEER_STATE/worker.ready" "the peer fixture's owner loop did not become ready"
+PEER_JOB_ID=$(FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" FM_REMOTE_JOB_TIMEOUT=25 \
+  FM_REMOTE_JOB_QUEUE_TIMEOUT=60 fm_remote_job_stage "$PEER_HOME" "$PEER_ROOT" "$REMOTE_HOME" \
+  fm-peer-hold.sh "$PEER_STARTED" "$PEER_SIDE_EFFECT" < /dev/null) \
+  || fail "the peer fixture job did not stage"
+PEER_JOB="$PEER_STATE/jobs/$PEER_JOB_ID"
+for _ in $(seq 1 200); do
+  [ -e "$PEER_JOB/.claim/supervisor" ] && break
+  sleep 0.05
+done
+assert_present "$PEER_JOB/.claim/supervisor" "the peer fixture job was not claimed by a lane"
+# Freeze only the owner loop; its lane keeps running, and the lane's recorded
+# parent stays a live serve loop.
+kill -STOP "$PEER_LOOP_A_PID"
+for _ in $(seq 1 100); do
+  [ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] && break
+  sleep 0.05
+done
+[ "$(ps -o state= -p "$PEER_LOOP_A_PID" 2>/dev/null | cut -c1)" = T ] \
+  || fail "the peer owner loop did not stop"
+rm -rf -- "$PEER_STATE/worker.lock"
+HOME="$PEER_HOME" FM_ROOT_OVERRIDE="$PEER_ROOT" FM_REMOTE_JOB_STATE_ROOT="$PEER_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$PEER_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/peer-b.out" 2> "$TMP_ROOT/peer-b.err" &
+PEER_LOOP_B_PID=$!
+for _ in $(seq 1 300); do
+  [ "$(cat "$PEER_STATE/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] && break
+  sleep 0.05
+done
+[ "$(cat "$PEER_STATE/worker.lock/pid" 2>/dev/null || true)" = "$PEER_LOOP_B_PID" ] \
+  || fail "the replacement peer loop did not take ownership"
+PEER_DEADLINE=$((SECONDS + 4))
+while [ "$SECONDS" -lt "$PEER_DEADLINE" ]; do
+  [ "$(fm_remote_job_read_state "$PEER_JOB" 2>/dev/null || true)" = running ] \
+    || fail "a peer loop reclaimed a running job owned by a live serving loop"
+  kill -0 "$(cat "$PEER_JOB/.claim/supervisor")" 2>/dev/null \
+    || fail "a peer loop stopped the live serving loop's lane"
+  sleep 0.2
+done
+assert_absent "$PEER_SIDE_EFFECT" "the peer fixture's job was interrupted by the replacement loop"
+PEER_LANE_GROUP=$(cat "$PEER_JOB/.claim/group" 2>/dev/null || true)
+PEER_LANE_PID=$(cat "$PEER_JOB/.claim/supervisor" 2>/dev/null || true)
+[ -n "$PEER_LANE_GROUP" ] || fail "the peer fixture job never recorded its command group"
+kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
+[ -z "$PEER_LANE_PID" ] || kill -KILL "$PEER_LANE_PID" 2>/dev/null || true
+kill -KILL "$PEER_LOOP_A_PID" 2>/dev/null || true
+wait "$PEER_LOOP_A_PID" 2>/dev/null || true
+PEER_LOOP_A_PID=
+kill -TERM "$PEER_LOOP_B_PID"
+for _ in $(seq 1 100); do kill -0 "$PEER_LOOP_B_PID" 2>/dev/null || break; sleep 0.05; done
+kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
+wait "$PEER_LOOP_B_PID" 2>/dev/null || true
+PEER_LOOP_B_PID=
+PEER_LANE_GROUP=
+pass "a live peer loop's running job is never reclaimed"
 
 mkdir -p "$ACCOUNT_HOME/.local/bin"
 PREEXEC_STARTED="$TMP_ROOT/preexecution-started"
@@ -855,30 +1069,23 @@ done
   || fail "the ownership-loss worker did not stop"
 rm -rf -- "$LOST_STATE/worker.lock"
 kill -CONT "$LOST_TERM_PID"
-LOST_READY_BEFORE=$(file_inode "$LOST_STATE/worker.ready")
-for _ in $(seq 1 100); do
-  LOST_READY_AFTER=$(file_inode "$LOST_STATE/worker.ready")
-  [ -n "$LOST_READY_AFTER" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] && break
-  sleep 0.05
-done
-[ -n "${LOST_READY_AFTER:-}" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] \
-  || fail "a worker with no ownership lock stopped publishing heartbeats before TERM"
-assert_absent "$LOST_STATE/worker.lock" "the ownership lock reappeared before TERM"
-kill -TERM "$LOST_TERM_PID"
-for _ in $(seq 1 100); do
+# The serving loop must notice the lost lock on its own, stop publishing the
+# heartbeat, and exit without any signal being sent to it.
+for _ in $(seq 1 200); do
   kill -0 "$LOST_TERM_PID" 2>/dev/null || break
   sleep 0.05
 done
 if kill -0 "$LOST_TERM_PID" 2>/dev/null; then
-  fail "TERM after ownership loss left the serving worker alive"
+  fail "a serving loop that lost its ownership lock kept running"
 fi
 wait "$LOST_TERM_PID" 2>/dev/null || true
 LOST_TERM_PID=
 LOST_READY_SETTLED=$(file_inode "$LOST_STATE/worker.ready")
 sleep 0.3
 [ "$(file_inode "$LOST_STATE/worker.ready")" = "$LOST_READY_SETTLED" ] \
-  || fail "a worker that lost ownership kept replacing its heartbeat after TERM"
-pass "TERM after ownership loss stops the serving worker"
+  || fail "a worker that lost ownership kept replacing its heartbeat"
+assert_absent "$LOST_STATE/worker.lock" "the ownership lock reappeared after ownership was lost"
+pass "a serving loop that loses ownership stops publishing and exits on its own"
 
 HOLD_STARTED="$TMP_ROOT/hold-started"
 HOLD_SIDE_EFFECT="$TMP_ROOT/hold-side-effect"

@@ -94,6 +94,13 @@
 # it to stop itself once its root is pruned, and
 # bin/fm-remote-job-reap-orphans.sh uses it to reap workers that were already
 # orphaned that way.
+#
+# Worker ownership identity is the process start token recorded in the lock and
+# in the readiness heartbeat: the kernel starttime on Linux, so a wall-clock
+# step cannot make a live owner read as a stranger, and the legacy lstart
+# rendering elsewhere. Readiness is bound to that owner, and ensure converges
+# on a live but unrecognizable worker by replacing its whole tree or reporting a
+# diagnostic rather than starting another supervisor beside it.
 
 FM_REMOTE_JOB_LABEL=dev.firstmate.remote-job
 FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
@@ -946,13 +953,45 @@ fm_remote_job_worker_ready_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.r
 fm_remote_job_worker_identity_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.identity"; }
 fm_remote_job_worker_lock_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.lock"; }
 
-fm_remote_job_process_start() {
+# A process's start identity is the value that distinguishes it from a later
+# process that reuses its pid. It must be derived from the kernel's monotonic
+# boot clock, not from the wall clock: a wall-clock step (WSL2's implicit
+# Hyper-V time sync steps this host roughly every 33 seconds) makes procps's
+# %lstart= render differently for the very same live process, so a recorded
+# lstart stops matching and a live owner reads as a stranger. On Linux the
+# kernel's starttime field is stable across any wall-clock step; other
+# platforms fall back to the legacy wall-clock rendering.
+fm_remote_job_process_start() { # <pid>
   local pid=$1 ps_bin value
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  if [ -r "/proc/$pid/stat" ]; then
+    value=$(fm_remote_job_linux_start_ticks "$pid") || return 1
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
   if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
   value=$("$ps_bin" -p "$pid" -o lstart= 2>/dev/null) || return 1
   [ -n "$value" ] || return 1
   case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
   printf '%s\n' "$value"
+}
+
+# /proc/<pid>/stat field 22 is the start time in clock ticks since boot. The
+# comm field (field 2) can contain spaces and parentheses, so everything
+# through the last ')' is stripped before indexing the space-separated fields
+# that follow; the next field, state, is field 3, so starttime is fields[19].
+fm_remote_job_linux_start_ticks() { # <pid>
+  local pid=$1 stat rest
+  local -a fields=()
+  IFS= read -r stat < "/proc/$pid/stat" 2>/dev/null || return 1
+  rest=${stat##*)}
+  [ -n "$rest" ] || return 1
+  read -r -a fields <<< "$rest" || return 1
+  [ "${#fields[@]}" -ge 20 ] || return 1
+  case "${fields[19]}" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "${fields[19]}"
 }
 
 fm_remote_job_process_command() {
@@ -968,6 +1007,15 @@ fm_remote_job_process_pgid() { # <pid>
   local pid=$1 ps_bin value
   if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
   value=$("$ps_bin" -p "$pid" -o pgid= 2>/dev/null) || return 1
+  value=$(printf '%s' "$value" | tr -d '[:space:]')
+  case "$value" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$value"
+}
+
+fm_remote_job_process_ppid() { # <pid>
+  local pid=$1 ps_bin value
+  if [ -x /bin/ps ]; then ps_bin=/bin/ps; elif [ -x /usr/bin/ps ]; then ps_bin=/usr/bin/ps; else return 1; fi
+  value=$("$ps_bin" -p "$pid" -o ppid= 2>/dev/null) || return 1
   value=$(printf '%s' "$value" | tr -d '[:space:]')
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$value"
@@ -1128,24 +1176,51 @@ fm_remote_job_worker_alive() { # <account-home>
   kill -0 "$pid" 2>/dev/null
 }
 
-fm_remote_job_probe() { # <account-home>; a fresh worker heartbeat or active job proves readiness
-  local account_home=$1 ready lock mtime now
+# A fresh heartbeat proves readiness only when it names the process that holds
+# the ownership lock. A superseded serving loop keeps refreshing its own
+# heartbeat, and if readiness trusted freshness alone that zombie made the
+# worker read as ready while a replacement owned it: the lock then looked
+# neither recognized nor reclaimably stale, which is the incident's trap. The
+# heartbeat record is "<pid> <start-token>", matched against the lock's
+# pid/start records, so a non-owner's heartbeat can never satisfy readiness.
+fm_remote_job_probe() { # <account-home>; a fresh heartbeat bound to the lock owner proves readiness
+  local account_home=$1 ready lock mtime now owner ready_pid lock_pid lock_start
   [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] && return 0
   fm_remote_job_prepare_state "$account_home" || return 1
   lock=$(fm_remote_job_worker_lock_path)
   [ ! -e "$lock/quarantine" ] && [ ! -L "$lock/quarantine" ] || return 1
   ready=$(fm_remote_job_worker_ready_path)
   [ -f "$ready" ] && [ ! -L "$ready" ] || return 1
+  owner=$(fm_remote_job_read_single_line "$ready" 512 2>/dev/null) || return 1
+  ready_pid=${owner%% *}
+  case "$ready_pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ready_pid" -gt 1 ] || return 1
+  if [ -d "$lock" ] && [ ! -L "$lock" ] && { [ -e "$lock/pid" ] || [ -L "$lock/pid" ]; }; then
+    lock_pid=$(fm_remote_job_read_single_line "$lock/pid" 64 2>/dev/null) || return 1
+    lock_start=$(fm_remote_job_read_single_line "$lock/start" 256 2>/dev/null) || return 1
+    [ "$owner" = "$lock_pid $lock_start" ] || return 1
+  fi
   mtime=$(fm_remote_job_path_mtime "$ready" 2>/dev/null || true)
   case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
   now=$(date +%s)
   [ $((now - mtime)) -le 10 ]
 }
 
+# Readiness after a start attempt must belong to a live lock owner, not merely
+# to a fresh heartbeat: a worker other than the one just started must never
+# satisfy the handshake.
 fm_remote_job_wait_for_probe() { # <remote-root> <account-home>
   local root=$1 account_home=$2 i=0
+  # An active caller runs inside the worker it is checking, so the lock handshake
+  # below would inspect a state root the worker owns directly; readiness is the
+  # same short-circuit the probe and identity predicates use.
+  [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] && return 0
   while [ "$i" -lt 200 ]; do
-    fm_remote_job_probe "$account_home" && fm_remote_job_worker_identity_matches "$root" "$account_home" && return 0
+    if fm_remote_job_probe "$account_home" \
+      && fm_remote_job_lock_owner_matches_process "$account_home" \
+      && fm_remote_job_worker_identity_matches "$root" "$account_home"; then
+      return 0
+    fi
     i=$((i + 1))
     sleep 0.1
   done
@@ -1190,6 +1265,39 @@ fm_remote_job_reload_launchagent() { # <account-home> <uid>
   fi
 }
 
+# A live worker whose lock record cannot be recognized used to be treated as
+# absent, so every ensure call started one more supervisor beside it - the
+# accumulation that drove the incident. Converge instead: stop every pid the
+# state root records that is provably this code root's worker, so the caller
+# starts exactly one fresh tree. A pid that is not this root's worker (a reused
+# pid, an unrelated process) is never signalled. When a fresh heartbeat exists
+# but no worker tree can be identified to replace, report it rather than
+# starting a second publisher beside it.
+fm_remote_job_replace_unrecognized_linux_worker() { # <remote-root> <account-home>
+  local root=$1 account_home=$2 lock pid_file candidate pid command stopped=0
+  fm_remote_job_prepare_state "$account_home" || return 1
+  lock=$(fm_remote_job_worker_lock_path)
+  pid_file=$(fm_remote_job_worker_pid_path)
+  for candidate in "$lock/pid" "$pid_file"; do
+    [ -e "$candidate" ] && [ ! -L "$candidate" ] || continue
+    pid=$(fm_remote_job_read_single_line "$candidate" 64 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$pid" -gt 1 ] || continue
+    command=$(fm_remote_job_process_command "$pid" 2>/dev/null || true)
+    case "$command" in *"$root/bin/fm-remote-job-worker.sh"*) ;; *) continue ;; esac
+    fm_remote_job_stop_worker_tree "$pid" || {
+      FM_REMOTE_JOB_ERROR="a live unrecognized remote job worker did not stop safely; stop it on the remote host, then retry"
+      return 1
+    }
+    stopped=1
+  done
+  if [ "$stopped" -eq 0 ] && fm_remote_job_probe "$account_home"; then
+    FM_REMOTE_JOB_ERROR="a live remote job worker is publishing readiness without a recognizable ownership record; stop it on the remote host, then retry"
+    return 1
+  fi
+  return 0
+}
+
 fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
   local root=$1 account_home=$2 worker pid
   worker="$root/bin/fm-remote-job-worker.sh"
@@ -1209,6 +1317,9 @@ fm_remote_job_start_linux_worker() { # <remote-root> <account-home>
       return 1
     }
     wait "$pid" 2>/dev/null || true
+    FM_REMOTE_JOB_REPAIRED=1
+  else
+    fm_remote_job_replace_unrecognized_linux_worker "$root" "$account_home" || return 1
     FM_REMOTE_JOB_REPAIRED=1
   fi
   # Job control puts the worker tree in its own process group, so a later stop
