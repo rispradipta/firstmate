@@ -297,6 +297,88 @@ test_send_requires_configuration() {
   pass "fm-telegram: send refuses without configuration"
 }
 
+test_whitespace_only_message_is_ignored_without_wedging() {
+  local home response out notes
+  home=$(make_home whitespace)
+  write_env "$home"
+  response="$TMP_ROOT/whitespace.response"
+  record "$response" 5 900900 private 42 alice "   "
+  record "$response" 6 900900 private 42 alice "real message"
+
+  out=$(FM_TELEGRAM_FAKE_RESPONSE="$response" run_telegram "$home" poll 2>&1)
+  assert_contains "$out" "ignored update 5" "a whitespace-only message is ignored, not captured"
+  assert_contains "$out" "queued update 6" "later updates still process after a whitespace-only message"
+  assert_equals "7" "$(cat "$home/state/.telegram-cursor")" "the cursor advances past the whitespace-only message"
+  notes=$(find "$home/state/inbox" -maxdepth 1 -name '*.note' | wc -l | tr -d ' ')
+  assert_equals "1" "$notes" "only the real message becomes a note"
+  pass "fm-telegram: a whitespace-only message does not wedge the poll cursor"
+}
+
+test_replayed_update_repairs_a_missing_telegram_wake() {
+  local home response out wakeq
+  home=$(make_home wake-repair)
+  write_env "$home"
+  # The note was recorded but the run died before its telegram wake landed.
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note --request-id tg:5 - <<< "hello captain" >/dev/null
+  response="$TMP_ROOT/wake-repair.response"
+  record "$response" 5 900900 private 42 alice "hello captain"
+
+  out=$(FM_TELEGRAM_FAKE_RESPONSE="$response" run_telegram "$home" poll 2>&1)
+  assert_contains "$out" "update 5 was already recorded" "the replay is recognized"
+  wakeq=$(cat "$home/state/.wake-queue" 2>/dev/null)
+  assert_contains "$wakeq" "check: telegram 5" "the replay appends the missing telegram wake"
+  pass "fm-telegram: a replayed update repairs a missing telegram wake"
+}
+
+test_unparseable_api_base_never_leaks_the_token() {
+  local out rc=0
+  out=$(FM_TELEGRAM_BOT_TOKEN=123456:fake-token-value \
+    FM_TELEGRAM_API_BASE=api.telegram.org \
+    python3 "$ROOT/bin/fm-telegram.py" poll_list 2>&1) || rc=$?
+  expect_code 1 "$rc" "an unparseable API base fails the poll cleanly"
+  assert_not_contains "$out" "fake-token-value" "the token never reaches the diagnostic"
+  assert_contains "$out" "getUpdates request failed" "the failure is reported token-free"
+  pass "fm-telegram.py: an unparseable API base never leaks the token"
+}
+
+test_flush_delivers_a_reply_to_an_acknowledged_note() {
+  local home note_out note_id out sent
+  home=$(make_home flush-handled)
+  write_env "$home"
+  note_out=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note --request-id tg:7 - <<< "question")
+  note_id=${note_out%%$'\n'*}
+  note_id=${note_id#queued }
+  [ -n "$note_id" ] || fail "fixture could not create the telegram note: $note_out"
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" reply "$note_id" "the answer" >/dev/null
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" drain --ack "$note_id" >/dev/null
+
+  sent="$TMP_ROOT/flush-handled.sent"
+  : > "$sent"
+  out=$(FM_TELEGRAM_FAKE_SENT="$sent" run_telegram "$home" flush 2>&1)
+  assert_contains "$out" "delivered 1 reply" "a reply to an acknowledged note still delivers"
+  assert_equals "1" "$(grep -c 'the answer' "$sent" || true)" "the acknowledged note's reply is sent once"
+  pass "fm-telegram: a reply to an acknowledged note is still delivered"
+}
+
+test_concurrent_flushes_deliver_each_reply_once() {
+  local home note_out note_id sent
+  home=$(make_home flush-race)
+  write_env "$home"
+  note_out=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note --request-id tg:8 - <<< "question")
+  note_id=${note_out%%$'\n'*}
+  note_id=${note_id#queued }
+  [ -n "$note_id" ] || fail "fixture could not create the telegram note: $note_out"
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" reply "$note_id" "the race answer" >/dev/null
+
+  sent="$TMP_ROOT/flush-race.sent"
+  : > "$sent"
+  FM_TELEGRAM_FAKE_SENT="$sent" run_telegram "$home" flush >/dev/null 2>&1 &
+  FM_TELEGRAM_FAKE_SENT="$sent" run_telegram "$home" flush >/dev/null 2>&1 &
+  wait
+  assert_equals "1" "$(grep -c 'the race answer' "$sent" || true)" "two concurrent flushes deliver the reply once"
+  pass "fm-telegram: concurrent flushes cannot double-deliver a reply"
+}
+
 test_help_and_usage
 test_missing_config_names_the_missing_value
 test_env_overrides_env_file
@@ -309,3 +391,8 @@ test_allowed_user_is_accepted
 test_flush_delivers_each_reply_once
 test_flush_skips_replies_that_are_not_telegram
 test_send_requires_configuration
+test_whitespace_only_message_is_ignored_without_wedging
+test_replayed_update_repairs_a_missing_telegram_wake
+test_unparseable_api_base_never_leaks_the_token
+test_flush_delivers_a_reply_to_an_acknowledged_note
+test_concurrent_flushes_deliver_each_reply_once

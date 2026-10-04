@@ -78,8 +78,8 @@ def call(method, params):
     # Return the parsed `result`, or None after one token-free diagnostic.
     url = "%s/bot%s/%s" % (api_base(), bot_token(), method)
     data = urllib.parse.urlencode(params).encode("utf-8")
-    request = urllib.request.Request(url, data=data)
     try:
+        request = urllib.request.Request(url, data=data)
         with urllib.request.urlopen(request, timeout=socket_timeout()) as response:
             body = response.read().decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001 - any transport failure is reported cleanly.

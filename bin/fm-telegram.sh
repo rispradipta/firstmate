@@ -206,15 +206,14 @@ user_allowed() {
 }
 
 note_request_id() {  # <note-id>
-  local id=$1 path=""
-  if [ -f "$INBOX/$id.note" ]; then
-    path="$INBOX/$id.note"
-  elif [ -f "$INBOX/handled/$id.note" ]; then
-    path="$INBOX/handled/$id.note"
-  else
-    return 1
-  fi
-  awk '/^--$/ { exit } /^request_id=/ { sub(/^request_id=/, ""); print; exit }' "$path"
+  local id=$1 path
+  for path in "$INBOX/$id.note" "$INBOX/handled/$id.note"; do
+    [ -f "$path" ] || continue
+    if awk '/^--$/ { exit } /^request_id=/ { sub(/^request_id=/, ""); print; exit }' "$path"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 reply_seq_of() {  # <reply-file>
@@ -241,8 +240,22 @@ compact_reply_list() {  # <cursor>
   done | sort -n -k1,1
 }
 
+telegram_woken_has() {  # <update-id>
+  [ -f "$WOKEN" ] && grep -qxF "$1" "$WOKEN" 2>/dev/null
+}
+
 telegram_woken_add() {  # <update-id>
   printf '%s\n' "$1" >> "$WOKEN" 2>/dev/null || true
+}
+
+telegram_wake_append() {  # <update-id> <summary>
+  local uid=$1 summary=$2
+  telegram_woken_has "$uid" && return 0
+  if fm_wake_append check "telegram:$uid" "check: telegram $uid - $summary"; then
+    telegram_woken_add "$uid"
+    return 0
+  fi
+  return 1
 }
 
 telegram_summary() {  # <name> <text>
@@ -260,6 +273,13 @@ poll_release() {
   [ -n "$POLL_LOCK" ] || return 0
   fm_lock_release "$POLL_LOCK" 2>/dev/null || true
   POLL_LOCK=
+}
+
+FLUSH_LOCK=
+flush_release() {
+  [ -n "$FLUSH_LOCK" ] || return 0
+  fm_lock_release "$FLUSH_LOCK" 2>/dev/null || true
+  FLUSH_LOCK=
 }
 
 action_poll() {
@@ -307,7 +327,7 @@ action_poll() {
       last_ok=$uid
       continue
     fi
-    if [ -z "$text" ]; then
+    if [ -z "${text//[[:space:]]/}" ]; then
       echo "fm-telegram: ignored update $uid: not a text message" >&2
       last_ok=$uid
       continue
@@ -326,24 +346,22 @@ action_poll() {
       failed=1
       break
     fi
-    last_ok=$uid
     case "$note_out" in
       queued\ *)
-        # A newly created note is the only case that surfaces: a replay means
-        # the note already exists and was already announced, so it must not
-        # produce a second wake.
         captured=$((captured + 1))
         printf 'fm-telegram: queued update %s\n' "$uid"
-        telegram_woken_add "$uid"
-        summary=$(telegram_summary "$name" "$text")
-        if ! fm_wake_append check "telegram:$uid" "check: telegram $uid - $summary"; then
-          echo "fm-telegram: queued update $uid but its telegram wake could not be appended" >&2
-        fi
         ;;
       *)
-        echo "fm-telegram: update $uid was already recorded; no new wake" >&2
+        echo "fm-telegram: update $uid was already recorded" >&2
         ;;
     esac
+    summary=$(telegram_summary "$name" "$text")
+    if ! telegram_wake_append "$uid" "$summary"; then
+      echo "fm-telegram: update $uid was recorded but its telegram wake could not be appended; it stays pending" >&2
+      failed=1
+      break
+    fi
+    last_ok=$uid
   done < "$raw"
   rm -f -- "$raw"
 
@@ -365,6 +383,16 @@ action_poll() {
 action_flush() {
   local cursor jmax seq file origin body delivered=0 failed=0
   mkdir -p "$STATE" || return 1
+  [ -r "$SCRIPT_DIR/fm-wake-lib.sh" ] || {
+    echo "fm-telegram: $SCRIPT_DIR/fm-wake-lib.sh missing; cannot flush" >&2
+    return 1
+  }
+  # shellcheck source=bin/fm-wake-lib.sh
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  FLUSH_LOCK="$STATE/.telegram-reply.lock"
+  fm_lock_acquire_wait "$FLUSH_LOCK" || return 1
+  trap flush_release EXIT
   cursor=$(reply_cursor_read)
   if [ -f "$REPLY_JOURNAL" ]; then
     jmax=$(awk 'NF && $1 + 0 > m { m = $1 + 0 } END { print m + 0 }' "$REPLY_JOURNAL")
@@ -379,6 +407,8 @@ action_flush() {
   fi
   [ -d "$REPLIES" ] || {
     printf 'fm-telegram: nothing to flush\n'
+    flush_release
+    trap - EXIT
     return 0
   }
 
@@ -423,6 +453,8 @@ action_flush() {
   elif [ "$failed" -eq 0 ]; then
     printf 'fm-telegram: nothing to flush\n'
   fi
+  flush_release
+  trap - EXIT
   [ "$failed" -eq 0 ]
 }
 
