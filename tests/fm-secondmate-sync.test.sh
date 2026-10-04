@@ -899,10 +899,9 @@ test_seed_marker_converges_existing_home() {
   pass "T13 gitignored marker: an existing marker-only-dirty home converges, then reads clean"
 }
 
-# --- T14: marker tolerance does not mask a genuinely dirty home -----------------
-# The ff-skip only forgives the seed marker; a real uncommitted change alongside the
-# marker must still refuse the fast-forward and leave the work untouched, exactly as
-# before this fix.
+# --- T14: untracked tolerance does not mask a genuinely dirty home ----------------
+# The ff-skip ignores untracked entries only; a real uncommitted tracked change must
+# still refuse the fast-forward and leave the work untouched, exactly as before.
 test_seed_marker_does_not_mask_real_dirt() {
   local w c0 base before
   w=$(new_world marker-real-dirt)
