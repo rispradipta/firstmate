@@ -1,0 +1,42 @@
+=== Scenario: /updatefirstmate advances primary + secondmate with an untracked treehouse.toml ===
+Fixture: primary 'source' at C1 with a BASE .gitignore (treehouse.toml NOT ignored),
+an untracked treehouse.toml (max_trees=2), and a linked-worktree secondmate home 'sm'
+that also carries an untracked treehouse.toml. Origin is one commit ahead at C2, whose
+commit carries the fixed .gitignore.
+
+git status --porcelain of the primary before the update (untracked, unignored file):
+  `git status --porcelain` -> '?? treehouse.toml'  (untracked and NOT yet ignored at C1)
+
+Command: FM_HOME=<lab>/home FM_ROOT_OVERRIDE=<lab>/source bin/fm-update.sh
+--- fm-update.sh output (watcher banner removed) ---
+firstmate: updated 0f422b3..1a98015 (instructions changed: AGENTS.md, bin)
+no watches registered
+secondmate sm: updated 0f422b3..1a98015 (instructions changed: AGENTS.md, bin)
+reread-firstmate: yes
+restart-secondmates: none
+nudge-secondmates: none
+--- results ---
+primary HEAD after : 1a9801593b26a6aa739884960ee118b4629b507f
+origin/main        : 1a9801593b26a6aa739884960ee118b4629b507f
+secondmate HEAD    : 1a9801593b26a6aa739884960ee118b4629b507f
+treehouse.toml (primary): max_trees = 2 root = "" 
+treehouse.toml (sm)     : max_trees = 2 root = "" 
+check-ignore after update: .gitignore:14:treehouse.toml	treehouse.toml
+
+=== The 2-slot limit is still enforced by the real treehouse tool ===
+Command (isolated HOME): cd source && treehouse get --lease  (three times)
+treehouse.toml in the code root: max_trees = 2 root = "" 
+--- treehouse get --lease #1 ---
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.treehouse/source-fac857/1/source. Run 'treehouse return ~/.treehouse/source-fac857/1/source' to release it.
+/tmp/fm-e2e.NMolnn/thhome2/.treehouse/source-fac857/1/source
+rc=0
+--- treehouse get --lease #2 ---
+🌳 Setting up worktree...
+🌳 Leased worktree at ~/.treehouse/source-fac857/2/source. Run 'treehouse return ~/.treehouse/source-fac857/2/source' to release it.
+/tmp/fm-e2e.NMolnn/thhome2/.treehouse/source-fac857/2/source
+rc=0
+--- treehouse get --lease #3 ---
+🌳 Setting up worktree...
+all 2 worktrees are in use or dirty (max_trees = 2). Run 'treehouse status' to see details, or increase max_trees in treehouse.toml
+rc=1

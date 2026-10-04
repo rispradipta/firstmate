@@ -1,0 +1,23 @@
+=== Adversarial: the untracked-tolerant guard must NOT weaken real guards ===
+
+--- S3: a TRACKED uncommitted edit still blocks the update ---
+Fixture: primary behind origin, untracked treehouse.toml AND a tracked edit to AGENTS.md.
+fm-update.sh output:
+firstmate: skipped: dirty working tree
+reread-firstmate: no
+restart-secondmates: none
+nudge-secondmates: none
+HEAD unchanged: yes
+tracked edit preserved: yes
+
+--- S6: an untracked file that the target commit would overwrite fails safely ---
+Fixture: origin's next commit ADDS tracked NEWFILE.md; the home has an untracked NEWFILE.md.
+fm-update.sh output:
+firstmate: skipped: fast-forward failed: error: The following untracked working tree files would be overwritten by merge:
+reread-firstmate: no
+restart-secondmates: none
+nudge-secondmates: none
+HEAD unchanged: 0e22db44ed65ffae53ecc25ece46a04d0de5883b
+origin/main   : f8ec4bb8481987bb2dab8adb6b1a84078941a791
+untracked NEWFILE.md preserved: yes
+untracked treehouse.toml preserved: yes
