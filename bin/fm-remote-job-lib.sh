@@ -981,7 +981,10 @@ fm_remote_job_process_start() { # <pid>
 # /proc/<pid>/stat field 22 is the start time in clock ticks since boot. The
 # comm field (field 2) can contain spaces and parentheses, so everything
 # through the last ')' is stripped before indexing the space-separated fields
-# that follow; the next field, state, is field 3, so starttime is fields[19].
+# that follow; the next field, state, is field 3, so starttime is fields[19]. A
+# defunct (Z) or dead (X) process still exposes a starttime, but it is not a
+# live process, so its identity is refused rather than returned as if it named
+# a running owner.
 fm_remote_job_linux_start_ticks() { # <pid>
   local pid=$1 stat rest
   local -a fields=()
@@ -990,6 +993,7 @@ fm_remote_job_linux_start_ticks() { # <pid>
   [ -n "$rest" ] || return 1
   read -r -a fields <<< "$rest" || return 1
   [ "${#fields[@]}" -ge 20 ] || return 1
+  case "${fields[0]}" in Z|X) return 1 ;; esac
   case "${fields[19]}" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "${fields[19]}"
 }

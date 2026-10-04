@@ -35,6 +35,7 @@ PEER_LANE_GROUP=
 CONVERGE_STATE=
 KILLED_OWNER_STATES=()
 REUSED_PID=
+ZOMBIE_PARENT=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # Collapses wait_for_probe's bounded retry cadence so its negative case is
 # exercised without paying the whole 20-second window in the suite.
@@ -60,6 +61,7 @@ cleanup_remote_job_fixture() {
   [ -z "$PEER_LOOP_B_PID" ] || kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
   [ -z "$PEER_LANE_GROUP" ] || kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
   [ -z "$REUSED_PID" ] || kill -KILL "$REUSED_PID" 2>/dev/null || true
+  [ -z "$ZOMBIE_PARENT" ] || kill -KILL "$ZOMBIE_PARENT" 2>/dev/null || true
   for leftover_state in "$CONVERGE_STATE" "${KILLED_OWNER_STATES[@]:-}"; do
     [ -n "$leftover_state" ] || continue
     [ -f "$leftover_state/worker.pid" ] || continue
@@ -604,6 +606,56 @@ reused_pid_probe_case reused-pid-lock 1
 pass "the probe rejects a reused pid's heartbeat under a stale lock"
 reused_pid_probe_case reused-pid-no-lock 0
 pass "the probe rejects a reused pid's heartbeat with the lock removed"
+
+# A defunct owner must not read as a live publisher either. A SIGKILLed process
+# can linger as a zombie while its lock records and a fresh heartbeat survive;
+# its start token still matches, so only rejecting the non-running state keeps
+# the probe honest and lets ensure converge instead of diagnosing a phantom
+# publisher.
+zombie_probe_case() { # <name> <with-lock 0|1>
+  local name=$1 with_lock=$2
+  local state="$TMP_ROOT/$name-state"
+  local home="$TMP_ROOT/$name-account"
+  local parent zpid zstat zrest zstart
+  local -a zfields=()
+  mkdir -p "$home" "$state"
+  chmod 700 "$home" "$state"
+  sh -c 'sleep 0.05 & exec sleep 30' &
+  parent=$!
+  ZOMBIE_PARENT="$parent"
+  zpid=
+  for _ in $(seq 1 100); do
+    zpid=$(pgrep -P "$parent" 2>/dev/null | head -n 1)
+    [ -n "$zpid" ] && [ "$(ps -o state= -p "$zpid" 2>/dev/null | cut -c1)" = Z ] && break
+    zpid=
+    sleep 0.05
+  done
+  [ -n "$zpid" ] || fail "could not create a zombie for $name"
+  zstat=$(cat "/proc/$zpid/stat" 2>/dev/null || true)
+  zrest=${zstat##*)}
+  read -r -a zfields <<< "$zrest"
+  zstart=${zfields[19]}
+  case "$zstart" in ''|*[!0-9]*) fail "could not read the zombie's start token for $name" ;; esac
+  printf '%s %s\n' "$zpid" "$zstart" > "$state/worker.ready"
+  printf '%s\n' "$zpid" > "$state/worker.pid"
+  chmod 600 "$state/worker.ready" "$state/worker.pid"
+  if [ "$with_lock" -eq 1 ]; then
+    mkdir -p "$state/worker.lock"
+    chmod 700 "$state/worker.lock"
+    printf '%s\n' "$zpid" > "$state/worker.lock/pid"
+    printf '%s\n' "$zstart" > "$state/worker.lock/start"
+    chmod 600 "$state/worker.lock/pid" "$state/worker.lock/start"
+  fi
+  ( FM_REMOTE_JOB_STATE_ROOT="$state"; fm_remote_job_probe "$home" ) \
+    && fail "the probe read a zombie owner's heartbeat as a live owner ($name)"
+  kill "$parent" 2>/dev/null || true
+  wait "$parent" 2>/dev/null || true
+  ZOMBIE_PARENT=
+}
+zombie_probe_case zombie-lock 1
+pass "the probe rejects a zombie owner's heartbeat under a stale lock"
+zombie_probe_case zombie-no-lock 0
+pass "the probe rejects a zombie owner's heartbeat with the lock removed"
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
 kill -KILL "$CRASHED_WORKER_PID"
