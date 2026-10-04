@@ -141,6 +141,7 @@ REPLIES="$INBOX/.replies"
 CURSOR="${FM_TELEGRAM_CURSOR:-$STATE/.telegram-cursor}"
 REPLY_CURSOR="$STATE/.telegram-reply-cursor"
 REPLY_JOURNAL="$STATE/.telegram-reply-sent"
+REPLY_PROGRESS_PREFIX="$STATE/.telegram-reply-progress"
 WOKEN="$STATE/.telegram-woken"
 
 PY="$(command -v python3 || true)"
@@ -191,6 +192,21 @@ reply_cursor_write() {
     return 1
   fi
   return 0
+}
+
+reply_progress_path() {  # <seq>
+  printf '%s.%s\n' "$REPLY_PROGRESS_PREFIX" "$1"
+}
+
+reply_progress_read() {  # <seq>
+  local path value=""
+  path=$(reply_progress_path "$1")
+  [ -f "$path" ] && value=$(sed -n '1p' "$path" 2>/dev/null | tr -d '[:space:]')
+  integer_or_zero "$value"
+}
+
+reply_progress_clear() {  # <seq>
+  rm -f -- "$(reply_progress_path "$1")"
 }
 
 user_allowed() {
@@ -403,6 +419,7 @@ action_flush() {
       cursor=$jmax
       reply_cursor_write "$cursor" || true
     fi
+    reply_progress_clear "$jmax"
     : > "$REPLY_JOURNAL"
   fi
   [ -d "$REPLIES" ] || {
@@ -418,6 +435,7 @@ action_flush() {
       echo "fm-telegram: skipped reply ${file##*/} with no note record" >&2
       cursor=$seq
       reply_cursor_write "$cursor" || true
+      reply_progress_clear "$seq"
       continue
     fi
     case "$origin" in
@@ -426,12 +444,16 @@ action_flush() {
         # A reply to a non-Telegram note belongs to another surface.
         cursor=$seq
         reply_cursor_write "$cursor" || true
+        reply_progress_clear "$seq"
         continue
         ;;
     esac
     body=$(reply_body_of "$file")
-    if printf '%s' "$body" | "$PY" "$PY_BIN" send_message "$CHAT_ID"; then
+    if printf '%s' "$body" \
+      | FM_TELEGRAM_SEND_PROGRESS="$(reply_progress_path "$seq")" \
+        "$PY" "$PY_BIN" send_message "$CHAT_ID" "$(reply_progress_read "$seq")"; then
       printf '%s\n' "$seq" >> "$REPLY_JOURNAL"
+      reply_progress_clear "$seq"
       if reply_cursor_write "$seq"; then
         : > "$REPLY_JOURNAL"
         cursor=$seq

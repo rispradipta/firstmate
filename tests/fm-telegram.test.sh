@@ -34,6 +34,12 @@ case "${2:-}" in
       cat >> "$FM_TELEGRAM_FAKE_SENT"
       printf '\n-----\n' >> "$FM_TELEGRAM_FAKE_SENT"
     fi
+    if [ -n "${FM_TELEGRAM_FAKE_START:-}" ]; then
+      printf '%s\n' "${4:-0}" >> "$FM_TELEGRAM_FAKE_START"
+    fi
+    if [ -n "${FM_TELEGRAM_FAKE_PROGRESS_WRITE:-}" ] && [ -n "${FM_TELEGRAM_SEND_PROGRESS:-}" ]; then
+      printf '%s\n' "$FM_TELEGRAM_FAKE_PROGRESS_WRITE" > "$FM_TELEGRAM_SEND_PROGRESS"
+    fi
     exit "${FM_TELEGRAM_FAKE_SEND_RC:-0}"
     ;;
 esac
@@ -379,6 +385,105 @@ test_concurrent_flushes_deliver_each_reply_once() {
   pass "fm-telegram: concurrent flushes cannot double-deliver a reply"
 }
 
+test_flush_resumes_a_partial_reply_at_its_recorded_chunk() {
+  local home note_out note_id seq out sent starts
+  home=$(make_home flush-resume)
+  write_env "$home"
+  note_out=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note --request-id tg:9 - <<< "question")
+  note_id=${note_out%%$'\n'*}
+  note_id=${note_id#queued }
+  [ -n "$note_id" ] || fail "fixture could not create the telegram note: $note_out"
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" reply "$note_id" "the long answer" >/dev/null
+  seq=$(awk '/^--$/ { exit } /^seq=/ { sub(/^seq=/, ""); print; exit }' "$home/state/inbox/.replies/$note_id")
+  printf '1\n' > "$home/state/.telegram-reply-progress.$seq"
+
+  sent="$TMP_ROOT/flush-resume.sent"
+  starts="$TMP_ROOT/flush-resume.starts"
+  : > "$sent"
+  : > "$starts"
+  out=$(FM_TELEGRAM_FAKE_SENT="$sent" FM_TELEGRAM_FAKE_START="$starts" run_telegram "$home" flush 2>&1)
+  assert_contains "$out" "delivered 1 reply" "the pending reply is delivered"
+  assert_equals "1" "$(cat "$starts")" "flush resumes at the recorded chunk, not the start"
+  assert_absent "$home/state/.telegram-reply-progress.$seq" "the chunk progress is removed once delivered"
+  assert_equals "$seq" "$(cat "$home/state/.telegram-reply-cursor")" "the reply cursor advances after full delivery"
+  pass "fm-telegram: flush resumes a partially delivered reply at its recorded chunk"
+}
+
+test_flush_keeps_chunk_progress_when_a_send_fails() {
+  local home note_out note_id seq out sent
+  home=$(make_home flush-progress-fail)
+  write_env "$home"
+  note_out=$(FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" note --request-id tg:10 - <<< "question")
+  note_id=${note_out%%$'\n'*}
+  note_id=${note_id#queued }
+  [ -n "$note_id" ] || fail "fixture could not create the telegram note: $note_out"
+  FM_HOME="$home" "$ROOT/bin/fm-inbox.sh" reply "$note_id" "a very long answer" >/dev/null
+  seq=$(awk '/^--$/ { exit } /^seq=/ { sub(/^seq=/, ""); print; exit }' "$home/state/inbox/.replies/$note_id")
+
+  sent="$TMP_ROOT/flush-progress-fail.sent"
+  : > "$sent"
+  out=$(FM_TELEGRAM_FAKE_SENT="$sent" FM_TELEGRAM_FAKE_PROGRESS_WRITE=2 \
+    FM_TELEGRAM_FAKE_SEND_RC=1 run_telegram "$home" flush 2>&1)
+  assert_contains "$out" "stays pending" "a failed reply stays pending"
+  assert_equals "2" "$(cat "$home/state/.telegram-reply-progress.$seq")" "the partial chunk progress survives the failure"
+  assert_absent "$home/state/.telegram-reply-cursor" "the reply cursor does not advance on a partial delivery"
+  pass "fm-telegram: a failed send keeps the partial chunk progress"
+}
+
+test_send_message_resumes_after_a_midway_chunk_failure() {
+  local rc=0
+  python3 - "$ROOT/bin/fm-telegram.py" "$TMP_ROOT/send-message.progress" <<'PY' || rc=$?
+import importlib.util
+import io
+import os
+import sys
+
+module_path, progress = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("fm_telegram_under_test", module_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+text = "".join("line %04d\n" % i for i in range(1200))
+chunks = mod._chunks(text)
+assert len(chunks) == 3, ("expected three chunks", len(chunks))
+
+os.environ["FM_TELEGRAM_SEND_PROGRESS"] = progress
+first = []
+calls = {"n": 0}
+
+def first_call(method, params):
+    calls["n"] += 1
+    if calls["n"] == 2:
+        return None
+    first.append(params["text"])
+    return {"message_id": calls["n"]}
+
+mod.call = first_call
+sys.stdin = io.StringIO(text)
+rc = mod.cmd_send_message(["chat", "0"])
+assert rc == 1, ("the first run must fail at the second chunk", rc)
+assert first == [chunks[0]], ("only the first chunk was accepted", first)
+with open(progress) as handle:
+    start = int(handle.read().strip())
+assert start == 1, ("progress records the one accepted chunk", start)
+
+second = []
+
+def second_call(method, params):
+    second.append(params["text"])
+    return {"message_id": len(second)}
+
+mod.call = second_call
+sys.stdin = io.StringIO(text)
+rc = mod.cmd_send_message(["chat", str(start)])
+assert rc == 0, ("the resume must succeed", rc)
+assert second == chunks[1:], ("the resume sends only the remaining chunks", second)
+assert chunks[0] not in second, "the accepted chunk is never posted twice"
+PY
+  expect_code 0 "$rc" "the chunk-resume driver must pass"
+  pass "fm-telegram.py: a mid-way chunk failure resumes without reposting a chunk"
+}
+
 test_help_and_usage
 test_missing_config_names_the_missing_value
 test_env_overrides_env_file
@@ -396,3 +501,6 @@ test_replayed_update_repairs_a_missing_telegram_wake
 test_unparseable_api_base_never_leaks_the_token
 test_flush_delivers_a_reply_to_an_acknowledged_note
 test_concurrent_flushes_deliver_each_reply_once
+test_flush_resumes_a_partial_reply_at_its_recorded_chunk
+test_flush_keeps_chunk_progress_when_a_send_fails
+test_send_message_resumes_after_a_midway_chunk_failure

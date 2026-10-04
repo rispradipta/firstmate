@@ -17,8 +17,13 @@
 #                            non-message update, so the caller can advance the
 #                            offset past it. Diagnostics go to stderr; a
 #                            network or API failure exits 1.
-#   send_message <chat_id>   Read the message text from stdin and call
+#   send_message <chat_id> [start-chunk]
+#                            Read the message text from stdin and call
 #                            sendMessage, chunking at the Telegram text limit.
+#                            Send from [start-chunk] (default 0) and record the
+#                            number of chunks accepted so far to
+#                            FM_TELEGRAM_SEND_PROGRESS after each success, so a
+#                            retry resumes at the first undelivered chunk.
 #                            Exits 1 on any failed chunk.
 #
 # Environment:
@@ -27,6 +32,8 @@
 #   FM_TELEGRAM_OFFSET      next update offset for poll_list, default 0
 #   FM_TELEGRAM_POLL_TIMEOUT  optional getUpdates long-poll seconds, default 0
 #   FM_TELEGRAM_TIMEOUT     optional HTTP socket timeout seconds, default 20
+#   FM_TELEGRAM_SEND_PROGRESS  optional file receiving the count of chunks each
+#                            sendMessage accepted
 #
 # A diagnostic never contains the token or the request URL, because the URL
 # embeds the token: failures are reported by method name and error class only.
@@ -172,6 +179,25 @@ def cmd_poll_list():
     return 0
 
 
+def _progress_path():
+    return os.environ.get("FM_TELEGRAM_SEND_PROGRESS", "")
+
+
+def _record_progress(path, delivered):
+    if not path:
+        return
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("%d\n" % delivered)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _chunks(text):
     if not text:
         return []
@@ -182,10 +208,19 @@ def _chunks(text):
 
 
 def cmd_send_message(argv):
-    if len(argv) != 1 or not argv[0]:
+    if not argv or not argv[0]:
         sys.stderr.write("fm-telegram: send_message requires exactly one chat id\n")
         return 2
+    if len(argv) > 2:
+        sys.stderr.write("fm-telegram: send_message takes a chat id and an optional start chunk\n")
+        return 2
     chat_id = argv[0]
+    start = 0
+    if len(argv) == 2:
+        if not argv[1].isdigit():
+            sys.stderr.write("fm-telegram: send_message start chunk must be a whole number\n")
+            return 2
+        start = int(argv[1])
     text = sys.stdin.read()
     if not text.strip():
         sys.stderr.write("fm-telegram: refusing to send empty text\n")
@@ -194,17 +229,22 @@ def cmd_send_message(argv):
     if not chunks:
         sys.stderr.write("fm-telegram: refusing to send empty text\n")
         return 2
-    for chunk in chunks:
+    progress = _progress_path()
+    if start > len(chunks):
+        start = len(chunks)
+    for index in range(start, len(chunks)):
         result = call(
             "sendMessage",
             {
                 "chat_id": chat_id,
-                "text": chunk,
+                "text": chunks[index],
                 "disable_web_page_preview": "true",
             },
         )
         if result is None:
+            _record_progress(progress, index)
             return 1
+        _record_progress(progress, index + 1)
     return 0
 
 
