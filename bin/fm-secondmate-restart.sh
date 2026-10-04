@@ -36,10 +36,11 @@
 #      open loop owned by the ordinary pending-reply recovery ladder, not state
 #      this restart pass may close.
 #
-# A mate whose persist answer did not arrive or whose runtime cannot prove a
-# restart gets the ordinary re-read nudge and is reported as a nudge, never as a
-# clean reload. Once a relaunch is attempted, any failed or ambiguous result is
-# reported as unknown rather than attributing it to either incarnation.
+# A mate whose persist answer did not arrive or whose record or runtime cannot
+# prove a restart gets the ordinary re-read nudge and is reported as a nudge,
+# never as a clean reload. Once a relaunch is attempted, any failed or ambiguous
+# result is reported as unknown rather than attributing it to either
+# incarnation.
 #
 # Placement changes the transport and nothing else. A local mate is restarted
 # with bin/fm-control.sh <id> relaunch, which republishes this home's own
