@@ -1,0 +1,41 @@
+
+### Scenario 1: ensure_worker starts exactly one serving loop, publishes a heartbeat bound to the live lock owner, and the start token is the kernel's monotonic starttime (not ps lstart)
+probe ready=yes
+serving loops=1
+worker.ready=3699328 29093863
+worker.lock/pid=3699328  worker.lock/start=29093863
+proc starttime=29093863
+ps lstart=Sun Oct  4 18:54:07 2026
+PASS: heartbeat binds owner pid + numeric kernel starttime
+PASS: a live owner still matches its lock record
+
+### Scenario 2: a real job staged through the queue completes with committed stdout and exit status (no silently lost job, no premature result)
+job job-b7jQEU stdout=hello\ from-live-harness exit=0
+PASS: job ran end-to-end and was reaped
+nonzero job exit=7
+
+### Scenario 3 (adversarial): a superseded loop's fresh heartbeat must not make readiness true, and a wall-clock lstart string must not be accepted as owner identity
+PASS: probe rejected the superseded/non-owner heartbeat
+PASS: wait_for_probe rejected the non-owner heartbeat
+PASS: wall-clock lstart is not accepted as the owner token
+PASS: probe recovered the live owner's heartbeat
+
+### Scenario 4 (adversarial): ensure converges on a live but unrecognized worker instead of accumulating supervisors
+PASS: the live worker is still running before replacement
+old pid=3699328 new pid=3710515 serving loops=1
+PASS: old unrecognized worker stopped
+
+### Scenario 5 (adversarial): a SIGKILLed owner's leftover fresh heartbeat is reclaimed and ensure converges instead of reporting a phantom publisher
+/tmp/fm-manual-live.sh: line 140: 3710458 Killed                  nohup env HOME="$account_home" FM_ROOT_OVERRIDE="$root" FM_REMOTE_JOB_STATE_ROOT="$FM_REMOTE_JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE="${FM_REMOTE_JOB_PLATFORM_OVERRIDE:-}" "$worker" >> "$FM_REMOTE_JOB_STATE/logs/$FM_REMOTE_JOB_LABEL.log" 2>&1 < /dev/null
+killed owner heartbeat age=0s
+PASS: probe rejected the killed owner's leftover heartbeat
+replacement pid=3711180 serving loops=1 probe=yes
+PASS: repeated ensure is idempotent (still one loop)
+
+### Scenario 6: a serving loop that loses its ownership lock stops publishing and exits on its own (no signal)
+lost-lock loop alive after wait=no
+PASS: loop exited after losing its lock
+PASS: heartbeat stopped advancing after ownership loss
+
+### RESULT
+ALL MANUAL LIVE CHECKS PASSED

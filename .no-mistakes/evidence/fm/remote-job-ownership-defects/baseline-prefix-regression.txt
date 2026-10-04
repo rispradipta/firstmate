@@ -1,0 +1,14 @@
+Regression check: target tests/fm-remote-job.test.sh run against the BASE code (fede6197)
+Exit code: 1
+
+--- tail of run (first new-behavior failure) ---
+ok - operator PATH honors nvm defaults with a deterministic fallback
+ok - operator PATH resolves the authorized Nix profile bin link
+ok - operator PATH orders discovered tool installs deterministically
+ok - the worker preserves bounded argv and stdin in an empty environment
+ok - active jobs keep the worker ready for concurrent requests
+not ok - the probe accepted a fresh heartbeat from a non-owner
+/tmp/fm-base-repo/bin/fm-remote-job-lib.sh: line 1012: 3725200 Killed                  HOME="$READY_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$READY_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/ready-owner.out" 2> "$TMP_ROOT/ready-owner.err"
+/tmp/fm-base-repo/bin/fm-remote-job-lib.sh: line 1012: 3725359 Killed                  sleep 30
+
+The base library has no owner-bound readiness, so the probe accepted a superseded loop's fresh heartbeat.
