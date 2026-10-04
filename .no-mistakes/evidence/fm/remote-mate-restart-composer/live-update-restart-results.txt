@@ -1,0 +1,20 @@
+# Live /updatefirstmate (bin/fm-update.sh) against disposable git worlds,
+# driven manually (real script; disposable remote host shim over the real
+# FM_SSH_BIN transport).
+
+## S7: legacy remote record (window=remote:sm1 + remote_host + remote_backend,
+## no remote_target) -- must still be restart-capable
+$ FM_TEST_SSH_BIN=<fake-ssh> run_update <world>
+firstmate: already current
+remote secondmate sm1: updated on remote-mac (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+reread-firstmate: no
+restart-secondmates: fm-sm1
+nudge-secondmates: none
+
+## S8: contradictory remote record (window=remote:other but
+## remote_target=fm-remote:w1:p1) -- must NOT be restarted; steered instead
+firstmate: already current
+remote secondmate sm1: updated on remote-mac (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+reread-firstmate: no
+restart-secondmates: none
+nudge-secondmates: fm-sm1

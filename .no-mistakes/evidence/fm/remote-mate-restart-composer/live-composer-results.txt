@@ -1,0 +1,6 @@
+session=fm-lab-composer-552040-16180 target=fm-lab-composer-552040-16180:w1:p1
+real_idle=empty
+real_draft=pending
+real_after_clear=empty
+injected_miss_once_idle=empty
+injected_draft_during_retry=pending

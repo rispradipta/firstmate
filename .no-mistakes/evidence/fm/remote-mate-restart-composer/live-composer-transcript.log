@@ -1,0 +1,8 @@
+session=fm-lab-composer-552040-16180 pane=w1:p1 target=fm-lab-composer-552040-16180:w1:p1
+pi idle: {"agent":"pi","agent_status":"idle","cwd":"/tmp/fm-live-composer.t1cTX6/project","focused":true,"foreground_cwd":"/tmp/fm-live-composer.t1cTX6/project","pane_id":"w1:p1","revision":2,"state_change_seq":1,"tab_id":"w1:t1","terminal_id":"term_65d04518af43f1","terminal_title":"π - project","terminal_title_stripped":"π - project","workspace_id":"w1"}
+REAL-HERDR idle  composer_state=empty
+REAL-HERDR draft composer_state=pending
+REAL-HERDR clear composer_state=empty
+FAULT-INJECT miss-once empty composer_state=empty
+FAULT-INJECT draft-during-retry composer_state=pending
+RESULTS empty=empty draft=pending retry_empty=empty retry_draft=pending

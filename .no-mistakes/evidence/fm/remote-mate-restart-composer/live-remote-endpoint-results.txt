@@ -1,0 +1,20 @@
+A_contradiction rc=0|state: unknown · source: remote-endpoint · endpoint record mismatch: remote endpoint record for rsm names window 'remote:other' that disagrees with its remote target 'fm-remote:w1:p1'|ssh_called=no
+B_legacy_alive rc=0|state: unknown · source: remote-endpoint · alive on remote-mac (an idle secondmate is healthy)
+C_legacy_unreachable rc=0|state: unknown · source: remote-endpoint · unknown-remote: remote-mac unreachable or endpoint unreadable (not proof of death); remote endpoint record for rsm names no target; reading through its host anyway
+D_peek_contradiction rc=1|●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/alvaris/.no-mistakes/worktrees/d8ff51db89f1/01M43HP3MSRVAMEES12QE0PPNT/.pi/extensions/fm-primary-turnend-guard.ts -e /home/alvaris/.no-mistakes/worktrees/d8ff51db89f1/01M43HP3MSRVAMEES12QE0PPNT/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: remote endpoint record for rsm names window 'remote:other' that disagrees with its remote target 'fm-remote:w1:p1'
+E_peek_legacy rc=0|●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/alvaris/.no-mistakes/worktrees/d8ff51db89f1/01M43HP3MSRVAMEES12QE0PPNT/.pi/extensions/fm-primary-turnend-guard.ts -e /home/alvaris/.no-mistakes/worktrees/d8ff51db89f1/01M43HP3MSRVAMEES12QE0PPNT/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+notice: remote endpoint record for rsm names no target; reading through its host anyway
+remote pane content
