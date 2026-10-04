@@ -362,6 +362,62 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
+# fm_backend_remote_endpoint_drift: the one owner of a remote record's
+# `window=remote:<id>` sentinel and its endpoint markers.
+#
+# A remote secondmate's authoritative endpoint lives on its own host, in that
+# home's own endpoint record; the parent-side `remote_backend=`,
+# `remote_target=`, and `window=remote:<id>` are advisory markers that let a
+# host-routed reader describe the route, not the read itself. So this validator
+# reports rather than invalidates:
+#   - 0, setting FM_BACKEND_REMOTE_DIAGNOSIS to a one-line note when the markers
+#     are absent or incomplete. Callers keep reading through the host and must
+#     not refuse a shape that was valid before those markers existed.
+#   - 1 only on a real contradiction, when markers are present but disagree
+#     with each other: a `window=` outside the `remote:<id>` sentinel that is
+#     not the recorded `remote_target=`, a malformed Herdr target, or a Herdr
+#     target outside the recorded `remote_herdr_session=`. The diagnosis names
+#     the exact contradiction.
+# A non-remote record returns 0 with an empty diagnosis.
+fm_backend_remote_endpoint_drift() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 backend target window session
+  FM_BACKEND_REMOTE_DIAGNOSIS=
+  [ -n "$(fm_meta_get "$meta" remote_host)" ] || return 0
+  backend=$(fm_meta_get "$meta" remote_backend)
+  target=$(fm_meta_get "$meta" remote_target)
+  window=$(fm_meta_get "$meta" window)
+  session=$(fm_meta_get "$meta" remote_herdr_session)
+  if [ -n "$target" ]; then
+    case "$window" in
+      ''|"remote:$id"|"$target") ;;
+      *)
+        FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names window '$window' that disagrees with its remote target '$target'"
+        return 1
+        ;;
+    esac
+    if [ "$backend" = herdr ]; then
+      case "$target" in
+        *:?*) ;;
+        *)
+          FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names malformed target '$target'"
+          return 1
+          ;;
+      esac
+      if [ -n "$session" ] && [ "${target%%:*}" != "$session" ]; then
+        FM_BACKEND_REMOTE_DIAGNOSIS="remote Herdr endpoint record for $id names target '$target' outside its recorded session '$session'"
+        return 1
+      fi
+    fi
+  fi
+  if [ -z "$backend" ]; then
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no backend; reading through its host anyway"
+  elif [ -z "$target" ]; then
+    # shellcheck disable=SC2034 # Published to sourcing callers.
+    FM_BACKEND_REMOTE_DIAGNOSIS="remote endpoint record for $id names no target; reading through its host anyway"
+  fi
+  return 0
+}
+
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely
 # from its durable metadata before any runtime command or cleanup mutation.
 # The validation binds the exact task id, selected backend, target, project,

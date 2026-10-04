@@ -50,7 +50,7 @@ FM_SECONDMATE_RESTART_HARNESS=""
 FM_SECONDMATE_RESTART_HOST=""
 FM_SECONDMATE_RESTART_REASON=""
 fm_secondmate_restart_capable() {  # <meta-file>
-  local meta=$1 kind window remote_host backend harness family
+  local meta=$1 kind window remote_host backend harness family id
   FM_SECONDMATE_RESTART_PLACEMENT=""
   FM_SECONDMATE_RESTART_BACKEND=""
   FM_SECONDMATE_RESTART_HARNESS=""
@@ -61,6 +61,7 @@ fm_secondmate_restart_capable() {  # <meta-file>
     FM_SECONDMATE_RESTART_REASON="no durable record for this second mate in this home"
     return 1
   fi
+  id=$(basename "$meta"); id=${id%.meta}
   kind=$(fm_meta_get "$meta" kind)
   if [ "$kind" != secondmate ]; then
     FM_SECONDMATE_RESTART_REASON="the durable record is not a second mate's"
@@ -76,6 +77,15 @@ fm_secondmate_restart_capable() {  # <meta-file>
   if [ -n "$remote_host" ]; then
     FM_SECONDMATE_RESTART_PLACEMENT=remote
     FM_SECONDMATE_RESTART_HOST=$remote_host
+    # A real contradiction in the record's endpoint markers is drift, not a
+    # restartable mate: report the exact defect so it is repaired rather than
+    # retried. An incomplete or legacy marker set is tolerated and restarted
+    # through its host, exactly as before this marker check existed.
+    if ! fm_backend_remote_endpoint_drift "$meta" "$id"; then
+      FM_SECONDMATE_RESTART_PLACEMENT=""
+      FM_SECONDMATE_RESTART_REASON="remote endpoint record mismatch: $FM_BACKEND_REMOTE_DIAGNOSIS"
+      return 1
+    fi
     # A remote mate's endpoint record lives on its host; the parent's own record
     # names the backend that launch established there, and the remote route
     # accepts nothing but herdr.

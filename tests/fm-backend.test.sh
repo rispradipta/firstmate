@@ -610,6 +610,97 @@ test_meta_get_and_backend_of_meta() {
   pass "fm_meta_get / fm_backend_of_meta: read last key=value and default backend to tmux"
 }
 
+# A remote second mate's parent record deliberately keeps `window=remote:<id>` as
+# a local sentinel while the authoritative endpoint lives on its own host. The
+# validator reports rather than invalidates: absent or incomplete markers are
+# tolerated (the read still routes to the host), and only a real contradiction
+# between markers present is refused.
+test_remote_endpoint_drift_validator() {
+  local consistent tolerated missing_target legacy_window drifted bad_session bad_target unknown_backend local_meta rc
+  consistent=$TMP_ROOT/remote-endpoint-ok.meta
+  tolerated=$TMP_ROOT/remote-endpoint-tolerated.meta
+  missing_target=$TMP_ROOT/remote-endpoint-no-target.meta
+  legacy_window=$TMP_ROOT/remote-endpoint-legacy-window.meta
+  drifted=$TMP_ROOT/remote-endpoint-drift.meta
+  bad_session=$TMP_ROOT/remote-endpoint-bad-session.meta
+  bad_target=$TMP_ROOT/remote-endpoint-bad-target.meta
+  unknown_backend=$TMP_ROOT/remote-endpoint-unknown-backend.meta
+  local_meta=$TMP_ROOT/remote-endpoint-local.meta
+
+  fm_write_meta "$consistent" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_root=/remote/root" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=fm-remote:w1:p1"
+  rc=0; fm_backend_remote_endpoint_drift "$consistent" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "a consistent remote record should validate, got rc=$rc: $FM_BACKEND_REMOTE_DIAGNOSIS"
+  [ -z "$FM_BACKEND_REMOTE_DIAGNOSIS" ] || fail "a consistent record should carry no diagnosis, got '$FM_BACKEND_REMOTE_DIAGNOSIS'"
+
+  # The fm-update.test.sh:292 shape: sentinel + host + backend, no target.
+  fm_write_meta "$tolerated" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_backend=herdr" "remote_herdr_session=fm-remote"
+  rc=0; fm_backend_remote_endpoint_drift "$tolerated" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "an incomplete-but-valid remote record must be tolerated, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *'reading through its host'*) : ;;
+    *) fail "a tolerated record should note the missing marker, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$missing_target" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_backend=herdr" "remote_herdr_session=fm-remote"
+  rc=0; fm_backend_remote_endpoint_drift "$missing_target" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "a remote record with no target must be tolerated, got rc=$rc"
+
+  # The fm-bootstrap-network-parallel.test.sh:246 shape: a local-looking window
+  # with no remote markers at all is legacy, not a contradiction.
+  fm_write_meta "$legacy_window" \
+    "window=firstmate:fm-rsm" "remote_host=remote-mac"
+  rc=0; fm_backend_remote_endpoint_drift "$legacy_window" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "a legacy remote record with no markers must be tolerated, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *'no backend'*) : ;;
+    *) fail "a markerless record should note the missing backend, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$drifted" \
+    "window=remote:other" "remote_host=remote-mac" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=fm-remote:w1:p1"
+  rc=0; fm_backend_remote_endpoint_drift "$drifted" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a window/target disagreement should be refused as drift, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *disagrees*) : ;;
+    *) fail "the drift diagnosis should name the disagreement, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$bad_session" \
+    "window=other-session:w1:p1" "remote_host=remote-mac" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=other-session:w1:p1"
+  rc=0; fm_backend_remote_endpoint_drift "$bad_session" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a target outside the recorded session should be refused as drift, got rc=$rc"
+  case "$FM_BACKEND_REMOTE_DIAGNOSIS" in
+    *'outside its recorded session'*) : ;;
+    *) fail "the session diagnosis should name the session, got '$FM_BACKEND_REMOTE_DIAGNOSIS'" ;;
+  esac
+
+  fm_write_meta "$bad_target" \
+    "window=remote:rsm" "remote_host=remote-mac" \
+    "remote_backend=herdr" "remote_herdr_session=fm-remote" "remote_target=badtarget"
+  rc=0; fm_backend_remote_endpoint_drift "$bad_target" rsm || rc=$?
+  [ "$rc" -eq 1 ] || fail "a malformed Herdr target should be refused as drift, got rc=$rc"
+
+  # An unknown remote backend is left to the backend-capability gate; this
+  # validator only reports marker contradictions.
+  fm_write_meta "$unknown_backend" \
+    "window=remote:rsm" "remote_host=remote-mac" "remote_backend=vaporware" "remote_target=vaporware:w1:p1"
+  rc=0; fm_backend_remote_endpoint_drift "$unknown_backend" rsm || rc=$?
+  [ "$rc" -eq 0 ] || fail "an unknown remote backend is not a marker contradiction, got rc=$rc"
+
+  fm_write_meta "$local_meta" "window=firstmate:fm-x1" "endpoint_task_id=x1"
+  rc=0; fm_backend_remote_endpoint_drift "$local_meta" x1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "a local record must validate with no remote work, got rc=$rc"
+  [ -z "$FM_BACKEND_REMOTE_DIAGNOSIS" ] || fail "a local record must carry no remote diagnosis"
+
+  pass "fm_backend_remote_endpoint_drift: tolerated remote records still route, marker contradictions are refused"
+}
+
 test_resolve_selector_three_forms() {
   local state=$TMP_ROOT/resolve-state fakebin out
   mkdir -p "$state"
@@ -1227,6 +1318,7 @@ test_backend_source_shell_portable
 test_backend_source_requires_adapter_file
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
+test_remote_endpoint_drift_validator
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract

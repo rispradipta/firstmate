@@ -3192,7 +3192,7 @@ fm_backend_herdr_composer_identity() {  # <target> -> "<agent>\t<status>"
 # by definition inside the viewport, and `--source visible` needs none of the
 # small-N --lines workaround.
 fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
-  local target=$1 cap caps verdict identity
+  local target=$1 cap caps verdict identity attempts i=0 retried=0
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   if cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null); then
     caps=$(printf 'styled=1\ncursor=0\nidentity=1')
@@ -3204,8 +3204,40 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|pending-unprove
   fi
   verdict=$(fm_composer_classify_screen "$caps" "$cap")
   if [ "$verdict" = need-identity ]; then
-    if ! identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null) || [ -z "$identity" ]; then
+    # The shared pi verdict proves an empty composer only from a live idle/done
+    # identity, so a single failed `agent get` - a registration momentarily
+    # absent while a Pi pane is between session reports - would turn a genuinely
+    # idle pane into a false `unknown` and refuse every restart of an idle remote
+    # mate. Re-probe a bounded number of times; an identity whose agent field is
+    # empty is unavailable too, so a malformed registration is never usable.
+    attempts=${FM_COMPOSER_IDENTITY_PROBE_ATTEMPTS:-3}
+    case "$attempts" in ''|*[!0-9]*|0) attempts=3 ;; esac
+    while [ "$i" -lt "$attempts" ]; do
+      if identity=$(fm_backend_herdr_composer_identity "$target" 2>/dev/null) \
+        && [ -n "${identity%%$'\t'*}" ]; then
+        [ "$i" -eq 0 ] || retried=1
+        break
+      fi
+      identity=''
+      i=$((i + 1))
+      [ "$i" -lt "$attempts" ] || break
+      sleep "${FM_COMPOSER_IDENTITY_PROBE_SLEEP:-0.2}"
+    done
+    if [ -z "$identity" ]; then
       identity='probe-absent'
+    elif [ "$retried" = 1 ]; then
+      # A retry slept, so the original capture may now predate the pane. Re-read
+      # the visible composer and classify the FRESH capture with that identity,
+      # so a draft typed during the retry window can never be read as empty and
+      # have an exit command concatenated onto it.
+      if cap=$(fm_backend_herdr_visible_capture_ansi "$target" 2>/dev/null); then
+        caps=$(printf 'styled=1\ncursor=0\nidentity=1')
+      elif cap=$(fm_backend_herdr_visible_capture "$target"); then
+        caps=$(printf 'styled=0\ncursor=0\nidentity=1')
+      else
+        printf 'unknown'
+        return 0
+      fi
     fi
     verdict=$(fm_composer_classify_screen "$caps" "$cap" '' "$identity")
     [ "$verdict" != need-identity ] || verdict=unknown

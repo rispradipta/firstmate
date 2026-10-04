@@ -23,7 +23,7 @@ Replacing the agent is also the only thing that re-resolves the launch-time wiri
 
 That is why **every live second mate is restarted after a successful update, including one that was already on the target commit.**
 Launch-time wiring is not derivable from a file diff, so an unchanged tracked surface is not evidence the running agent is already on the current behavior.
-The only live mates that do not restart are the ones whose home the update pass had to skip, and the ones whose runtime cannot prove a restart; the updater keeps both cases honest and neither is reported as a reload.
+The only live mates that do not restart are the ones whose home the update pass had to skip, and the ones whose record or runtime cannot prove a restart; the updater keeps both cases honest and neither is reported as a reload.
 
 **One-time rollout note:** the update that carries this change is still executed by the previous release, which restarts only the mates whose `AGENTS.md` or `.agents/skills/` moved on that pass. After it completes, run `bin/fm-secondmate-restart.sh <fm-id>...` once with every live second mate ID, not only the ones that release named; later updates follow the normal flow below.
 

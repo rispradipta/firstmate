@@ -48,9 +48,11 @@
 #     on the new bytes, nothing here forces, stashes, or discards it, and it gets
 #     no action at all. A divergence remains in the durable reconciliation record
 #     that this or a later bootstrap/update pass surfaces.
-#   - its runtime cannot prove the old agent stopped and a replacement came up
-#     (bin/fm-secondmate-restart-lib.sh owns that test), so it falls to the
-#     honest re-read steer and is reported as a nudge, never as a reload.
+#   - its durable record or runtime cannot prove the old agent stopped and a
+#     replacement came up (bin/fm-secondmate-restart-lib.sh owns that test),
+#     including a remote endpoint record whose own markers contradict each
+#     other, so it falls to the honest re-read steer and is reported as a nudge,
+#     never as a reload.
 # A positively dead or missing endpoint has no agent to replace and is left to
 # the ordinary startup recovery.
 #
@@ -107,8 +109,8 @@ fi
 # --- secondmates -----------------------------------------------------------
 # Every live secondmate this pass leaves on origin's tip is restarted, whether it
 # advanced or was already there. The header above owns why the git diff does not
-# gate that, and which two conditions - a skipped home, an unprovable runtime -
-# are the only ways a live mate stays out of the restart set.
+# gate that, and which two conditions - a skipped home, an unprovable record or
+# runtime - are the only ways a live mate stays out of the restart set.
 
 # FF_NUDGE_WINDOWS and FF_SEEN_HOMES are the sweep's own accumulators and are
 # reset here per its contract; the instruction-gated nudge set is the session-start
@@ -142,9 +144,9 @@ selector_claimed() {  # <selector>
 }
 
 # Route one secondmate whose home this pass left on the target commit. Restart is
-# the outcome unless its runtime cannot prove one, in which case it keeps the
-# re-read steer and is reported as a nudge rather than as a reload. A stopped
-# endpoint has no agent to replace and is left to startup recovery.
+# the outcome unless its record or runtime cannot prove one, in which case it
+# keeps the re-read steer and is reported as a nudge rather than as a reload. A
+# stopped endpoint has no agent to replace and is left to startup recovery.
 claim_settled_secondmate() {  # <id>
   local id=$1
   selector_claimed "fm-$id" && return 0
