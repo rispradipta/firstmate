@@ -11,6 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
+| Dispatch concurrency | [Dispatch concurrency cap](#dispatch-concurrency-cap-configmax-concurrent-workers) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -409,6 +410,23 @@ Linking the code-root copy into the home therefore forks the queue on the first 
 Run every routine Firstmate backlog command through [`bin/fm-tasks-axi.sh`](../bin/fm-tasks-axi.sh).
 Like lifecycle transitions, it addresses this home's backlog and archive from any working directory.
 Bootstrap reports a code-root `data/backlog.md` or `data/done-archive.md` that is not this home's own file as a `BACKLOG_RECONCILE: code-root ...` line, even in a read-only session.
+
+## Dispatch concurrency cap (config/max-concurrent-workers)
+
+`config/max-concurrent-workers` is this home's standing limit on how many fresh crewmates and scouts it runs at once, defaulting to `2` when the file is absent.
+It exists so a treehouse pool's physical `max_trees` is never the thing that fails a dispatch: an over-cap dispatch stays queued and runs later, when a task finishes and frees a slot.
+It binds while attended as well as away, unlike the away-only spend cap owned by [`bin/fm-afk-contract.sh`](../bin/fm-afk-contract.sh).
+
+[`bin/fm-dispatch-cap.sh`](../bin/fm-dispatch-cap.sh) is the single owner of the value, the live count, and the verdict, and its header owns exact parsing and exit codes.
+Firstmate checks it before calling [`bin/fm-spawn.sh`](../bin/fm-spawn.sh), and the spawn enforces the same verdict as a backstop.
+A fresh dispatch at cap is a distinct at-cap outcome (exit `10`), not an error, and the backlog item keeps its Queued state because the spawn declines before any endpoint, local copy, or In-flight transition exists.
+Only this home's own `state/*.meta` records whose kind is not secondmate count; a relaunch of an existing task and a secondmate spawn are exempt.
+
+### Set and validate the cap
+
+To change it, write one positive base-10 integer, optionally followed by exactly one newline, into the local, gitignored `config/max-concurrent-workers` file.
+Malformed, zero, multi-line, symlinked, hardlinked, or otherwise unsafe values are refused as an actionable error rather than treated as a default; only an absent file takes the default of `2`.
+The value is local to each home and is not inherited by secondmate homes, because concurrency is a property of the home doing the dispatch.
 
 ## Runtime backend (config/backend / FM_BACKEND)
 

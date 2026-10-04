@@ -201,6 +201,8 @@ Fill the task subsections according to section 11.
 ### Dispatch and supervision handoff
 
 Spawn only through `bin/fm-spawn.sh` after the profile and backend checks in section 4.
+A fresh ship or scout is dispatched only while this home is below its standing dispatch concurrency cap (`config/max-concurrent-workers`, default 2); consult `bin/fm-dispatch-cap.sh check` before spawning, and leave the item queued at cap.
+At cap the spawn declines with a distinct at-cap outcome rather than an error, so the backlog item keeps its Queued state until a finishing task frees a slot; a relaunch of an existing task and a secondmate spawn are exempt.
 The spawn must resolve a genuine isolated task worktree distinct from the primary checkout; a failed isolation assertion stops the task.
 When the configured tasks-axi backlog gate applies, the spawn itself moves the work item to In flight and refuses rather than dispatching work this home has no item for, so recording the dispatch is never a separate step to remember; a manual-backend home retains the hand-editing contract in `docs/configuration.md`.
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.

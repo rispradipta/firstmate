@@ -1486,12 +1486,22 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
       rc=2
       continue
     elif [ "$KIND" = scout ]; then
-      if FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout; then :; else
+      pair_rc=0
+      FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout || pair_rc=$?
+      if [ "$pair_rc" -eq 10 ]; then
+        echo "batch: HELD at cap ${pair%%=*}; stays queued for a later pass" >&2
+        [ "$rc" -eq 0 ] && rc=10
+      elif [ "$pair_rc" -ne 0 ]; then
         echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
         rc=1
       fi
     else
-      if FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}"; then :; else
+      pair_rc=0
+      FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" || pair_rc=$?
+      if [ "$pair_rc" -eq 10 ]; then
+        echo "batch: HELD at cap ${pair%%=*}; stays queued for a later pass" >&2
+        [ "$rc" -eq 0 ] && rc=10
+      elif [ "$pair_rc" -ne 0 ]; then
         echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
         rc=1
       fi
@@ -1557,6 +1567,30 @@ spawn_refuse_if_away_spend_cap() {
     exit 1
   fi
 }
+spawn_refuse_if_dispatch_cap() {
+  local rc out
+  [ "$RELAUNCH" -ne 1 ] || return 0
+  [ "$KIND" != secondmate ] || return 0
+  if out=$("$SCRIPT_DIR/fm-dispatch-cap.sh" check --exclude "$ID"); then
+    rc=0
+  else
+    rc=$?
+  fi
+  case "$rc" in
+  0) return 0 ;;
+  10)
+    # At cap is a distinct, non-error outcome: the item stays queued and is
+    # dispatched later, when a task finishes and frees a slot. The exit code
+    # matches bin/fm-dispatch-cap.sh's own so both actors read the same verdict.
+    echo "at cap: ${out}; task $ID stays queued and dispatches when a slot frees (config/max-concurrent-workers; bin/fm-dispatch-cap.sh)" >&2
+    exit 10
+    ;;
+  *)
+    echo "error: spawn refused - this home's dispatch cap at config/max-concurrent-workers could not be evaluated (bin/fm-dispatch-cap.sh)" >&2
+    exit 1
+    ;;
+  esac
+}
 # Spend cap (bin/fm-afk-contract.sh's spend_max_concurrent_workers): while an
 # away record exists (never a quiet-mode one, whose captain is present and
 # spends as attended: bin/fm-afk-contract.sh mode), a fresh ordinary spawn
@@ -1568,6 +1602,18 @@ spawn_refuse_if_away_spend_cap() {
 # exists, so a refusal costs nothing to unwind; rechecked after the task-set
 # lock so two fresh spawns cannot both publish from a stale count.
 spawn_refuse_if_away_spend_cap
+# Standing dispatch cap (config/max-concurrent-workers, default 2; contract:
+# bin/fm-dispatch-cap.sh): firstmate's own limit on how many ordinary crewmates
+# and scouts one home runs at once, held so a treehouse pool's physical slot
+# limit is never the thing that fails a dispatch. It binds while attended as
+# well as away, unlike the away-only spend cap above, and declines with the
+# distinct at-cap code (10) rather than an error so the backlog item stays
+# queued. Exempt for the same reasons as the spend cap: a relaunch replaces a
+# worker that already counts, and a secondmate is a persistent home rather than
+# a parallel slot. Checked before any endpoint, worktree, or record exists and
+# rechecked under the task-set lock below, so two fresh spawns cannot both
+# publish from a stale count.
+spawn_refuse_if_dispatch_cap
 spawn_require_relocated_queued_work() {
   local actor
   [ "$RELAUNCH" -ne 1 ] || return 0
@@ -1634,6 +1680,7 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   SPAWN_TASK_SET_LOCK_HELD=1
   spawn_refuse_if_away_spend_cap
+  spawn_refuse_if_dispatch_cap
   spawn_require_relocated_queued_work
 fi
 if [ "$KIND" = secondmate ]; then
