@@ -33,6 +33,7 @@ PEER_LOOP_A_PID=
 PEER_LOOP_B_PID=
 PEER_LANE_GROUP=
 CONVERGE_STATE=
+KILLED_OWNER_STATES=()
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # Collapses wait_for_probe's bounded retry cadence so its negative case is
 # exercised without paying the whole 20-second window in the suite.
@@ -57,7 +58,7 @@ cleanup_remote_job_fixture() {
   [ -z "$PEER_LOOP_A_PID" ] || kill -KILL "$PEER_LOOP_A_PID" 2>/dev/null || true
   [ -z "$PEER_LOOP_B_PID" ] || kill -KILL "$PEER_LOOP_B_PID" 2>/dev/null || true
   [ -z "$PEER_LANE_GROUP" ] || kill -KILL -- "-$PEER_LANE_GROUP" 2>/dev/null || true
-  for leftover_state in "$CONVERGE_STATE"; do
+  for leftover_state in "$CONVERGE_STATE" "${KILLED_OWNER_STATES[@]:-}"; do
     [ -n "$leftover_state" ] || continue
     [ -f "$leftover_state/worker.pid" ] || continue
     kill -KILL "$(cat "$leftover_state/worker.pid")" 2>/dev/null || true
@@ -519,6 +520,52 @@ CV_SERVES=$(pgrep -fc "$CONVERGE_ROOT/bin/fm-remote-job-worker.sh --serve" || tr
   fm_remote_job_worker_identity_matches "$CONVERGE_ROOT" "$CONVERGE_HOME" ) \
   || fail "the converged worker did not publish the matching identity"
 pass "ensure replaces an unrecognized live worker instead of accumulating"
+
+# A SIGKILLed owner leaves its lock records, its worker.pid, and a still-fresh
+# heartbeat behind, because no shutdown handler runs to clear them. ensure must
+# not mistake that dead owner's heartbeat for a live publisher and refuse to
+# start: it must treat the heartbeat as stale, reclaim the ownership, and
+# converge on exactly one fresh worker, whether the lock directory survived the
+# kill or was removed.
+killed_owner_converge_case() { # <name> <remove-lock 0|1>
+  local name=$1 remove_lock=$2
+  local dead_root="$TMP_ROOT/$name-root"
+  local dead_home="$TMP_ROOT/$name-account"
+  local dead_state="$TMP_ROOT/$name-state"
+  local dead_pid dead_pgid new_pid serves
+  cp -R "$REMOTE_ROOT" "$dead_root"
+  mkdir -p "$dead_home"
+  chmod 700 "$dead_home"
+  KILLED_OWNER_STATES+=("$dead_state")
+  ( FM_REMOTE_JOB_STATE_ROOT="$dead_state"; fm_remote_job_ensure_worker "$dead_root" "$dead_home" ) \
+    || fail "the $name fixture worker did not start"
+  dead_pid=$(cat "$dead_state/worker.pid")
+  kill -0 "$dead_pid" 2>/dev/null || fail "the $name fixture worker was not alive"
+  dead_pgid=$(fm_remote_job_process_pgid "$dead_pid" 2>/dev/null || true)
+  case "$dead_pgid" in ''|*[!0-9]*) fail "the $name fixture worker has no process group" ;; esac
+  kill -KILL -- "-$dead_pgid" 2>/dev/null || true
+  for _ in $(seq 1 100); do kill -0 "$dead_pid" 2>/dev/null || break; sleep 0.05; done
+  kill -0 "$dead_pid" 2>/dev/null && fail "the $name fixture worker survived SIGKILL"
+  assert_present "$dead_state/worker.ready" "the $name killed owner published no heartbeat"
+  assert_present "$dead_state/worker.pid" "the $name killed owner published no pid record"
+  [ "$remove_lock" -eq 0 ] || rm -rf -- "$dead_state/worker.lock"
+  ( FM_REMOTE_JOB_STATE_ROOT="$dead_state"; fm_remote_job_probe "$dead_home" ) \
+    && fail "the probe read a killed owner's fresh heartbeat as ready ($name)"
+  [ ! -d "$dead_state/worker.lock" ] || touch -t 200001010000 "$dead_state/worker.lock"
+  ( FM_REMOTE_JOB_STATE_ROOT="$dead_state"; fm_remote_job_ensure_worker "$dead_root" "$dead_home" ) \
+    || fail "ensure did not converge past a killed owner's fresh heartbeat ($name)"
+  new_pid=$(cat "$dead_state/worker.pid")
+  [ "$new_pid" != "$dead_pid" ] || fail "ensure retained the $name killed owner's pid"
+  ( FM_REMOTE_JOB_STATE_ROOT="$dead_state"; fm_remote_job_probe "$dead_home" ) \
+    || fail "the $name converged worker did not publish readiness"
+  serves=$(pgrep -fc "$dead_root/bin/fm-remote-job-worker.sh --serve" || true)
+  [ "$serves" -eq 1 ] || fail "the $name state left $serves serving workers instead of one"
+  fm_remote_job_stop_worker_tree "$new_pid" 2>/dev/null || true
+}
+killed_owner_converge_case killed-owner-lock 0
+pass "ensure reclaims a killed owner's fresh stale lock instead of failing"
+killed_owner_converge_case killed-owner-no-lock 1
+pass "ensure reclaims a killed owner's fresh heartbeat with the lock removed"
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
 kill -KILL "$CRASHED_WORKER_PID"

@@ -1204,13 +1204,16 @@ fm_remote_job_worker_alive() { # <account-home>
 }
 
 # A fresh heartbeat proves readiness only when it names the process that holds
-# the ownership lock. A superseded serving loop keeps refreshing its own
-# heartbeat, and if readiness trusted freshness alone that zombie made the
-# worker read as ready while a replacement owned it: the lock then looked
-# neither recognized nor reclaimably stale, which is the incident's trap. The
-# heartbeat record is "<pid> <start-token>", matched against the lock's
-# pid/start records, so a non-owner's heartbeat can never satisfy readiness.
-fm_remote_job_probe() { # <account-home>; a fresh heartbeat bound to the lock owner proves readiness
+# the ownership lock, and only while that process is still alive. A superseded
+# serving loop keeps refreshing its own heartbeat, and if readiness trusted
+# freshness alone that zombie made the worker read as ready while a replacement
+# owned it: the lock then looked neither recognized nor reclaimably stale,
+# which is the incident's trap. A SIGKILLed owner leaves the same fresh-looking
+# record behind, so freshness and binding alone would let a dead owner read as a
+# live publisher. The heartbeat record is "<pid> <start-token>", matched against
+# the lock's pid/start records and checked against a live pid, so neither a
+# non-owner's heartbeat nor a dead owner's leftover can satisfy readiness.
+fm_remote_job_probe() { # <account-home>; a fresh heartbeat bound to a live lock owner proves readiness
   local account_home=$1 ready lock mtime now owner ready_pid lock_pid lock_start
   [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] && return 0
   fm_remote_job_prepare_state "$account_home" || return 1
@@ -1222,6 +1225,7 @@ fm_remote_job_probe() { # <account-home>; a fresh heartbeat bound to the lock ow
   ready_pid=${owner%% *}
   case "$ready_pid" in ''|*[!0-9]*) return 1 ;; esac
   [ "$ready_pid" -gt 1 ] || return 1
+  kill -0 "$ready_pid" 2>/dev/null || return 1
   if [ -d "$lock" ] && [ ! -L "$lock" ] && { [ -e "$lock/pid" ] || [ -L "$lock/pid" ]; }; then
     lock_pid=$(fm_remote_job_read_single_line "$lock/pid" 64 2>/dev/null) || return 1
     lock_start=$(fm_remote_job_read_single_line "$lock/start" 256 2>/dev/null) || return 1
