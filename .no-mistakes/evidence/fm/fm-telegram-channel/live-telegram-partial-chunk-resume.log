@@ -1,0 +1,28 @@
+### Live Telegram validation: >4096-char reply, second chunk fails, then resumes
+repo: /home/alvaris/.no-mistakes/worktrees/d8ff51db89f1/01M4330N15FP548EZVZY2JF00D (commit 26db461)
+lab home: /tmp/fm-tg-lab.or059q/home-evidence (disposable, deleted after this run)
+reply body: 9096 chars = 3 chunks (A*4096, B*4096, C*904)
+
+$ fm-telegram.sh flush   # server accepts chunk 0, fails chunk 1 (call #2)
+fm-telegram: sendMessage refused: injected failure
+fm-telegram: reply 1791108158-mJyfjA could not be delivered; it stays pending
+progress file = 1
+reply cursor  = ABSENT
+
+server request log (chunk summaries):
+  sendMessage  len=4096 head='AAAA' chat=900900
+  sendMessage  len=4096 head='BBBB' chat=900900
+
+$ fm-telegram.sh flush   # resume: no failures now
+fm-telegram: delivered 1 reply/replies
+progress file = ABSENT
+reply cursor  = 1
+
+server request log on resume (chunk summaries):
+  sendMessage  len=4096 head='BBBB' chat=900900
+  sendMessage  len=904 head='CCCC' chat=900900
+
+RESULT: chunk A (already accepted) was NOT re-sent on resume; only B and C went out.
+
+$ fm-telegram.sh flush   # nothing left
+fm-telegram: nothing to flush

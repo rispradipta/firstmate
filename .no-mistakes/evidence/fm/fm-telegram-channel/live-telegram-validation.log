@@ -1,0 +1,115 @@
+# Live Telegram channel validation (test phase)
+
+Commit under test: 26db461 (branch fm/fm-telegram-channel)
+Base: fede619
+
+## How this was driven live
+
+A disposable lab home (`bin/fm-lab-home.sh create ...`, deleted after the run) was
+pointed at a real loopback HTTP server that emulates the Telegram Bot API
+(`getUpdates` / `sendMessage`). The real product binaries
+`bin/fm-telegram.sh`, `bin/fm-telegram.py`, `bin/fm-telegram-check.sh` and
+`bin/fm-inbox.sh` made real HTTP requests to that server; nothing stubbed the
+product. No live Telegram account or bot token was used.
+
+Lab home: /tmp/fm-tg-lab.or059q (removed at end of run)
+
+## Scenario 1 - poll captures the allowlisted message as a durable note + check wake
+
+    $ fm-telegram.sh poll
+    fm-telegram: queued update 5
+    fm-telegram: ignored update 6: chat 555 is not the allowlisted chat
+    fm-telegram: ignored update 7: not a text message
+    fm-telegram: ignored update 8: not a text message
+    fm-telegram: queued update 9
+
+    notes:
+      id=... request_id=tg:5  ->  hello captain
+      id=... request_id=tg:9  ->  real message
+    cursor  = 10
+    .wake-queue:
+      check  inbox:...            check: captain inbox note ... - hello captain
+      check  telegram:5           check: telegram 5 - from alice: hello captain
+      check  inbox:...            check: captain inbox note ... - real message
+      check  telegram:9           check: telegram 9 - from alice: real message
+    .telegram-woken: 5, 9
+
+Non-allowlisted chat, non-text, and whitespace-only updates produced no note and
+still advanced the cursor, so the whitespace message could not wedge the poll.
+
+Replay with cursor reset to 0 (idempotency):
+
+    fm-telegram: update 5 was already recorded
+    ... update 9 was already recorded
+    note count = 2 ; telegram wake count for 5 = 1 ; for 9 = 1
+
+## Scenario 2 - a replay repairs a missing telegram wake
+
+    # note recorded but run died before the wake landed
+    $ fm-telegram.sh poll
+    fm-telegram: update 11 was already recorded
+    .wake-queue: check telegram:11   check: telegram 11 - from alice: hello captain
+
+## Scenario 3 - optional sender allowlist is a real boundary
+
+    $ FM_TELEGRAM_ALLOWED_USERS=77 fm-telegram.sh poll
+    fm-telegram: ignored update 40: sender 42 is not in FM_TELEGRAM_ALLOWED_USERS
+    fm-telegram: queued update 41
+    note count = 1 (only the allowed sender)
+
+## Scenario 4 - a message is a durable note first, answer delivered back exactly once
+
+    $ fm-telegram.sh poll        # update 60
+    fm-telegram: queued update 60
+    $ fm-inbox.sh reply <note> "the recorded answer"
+    $ fm-telegram.sh flush
+    fm-telegram: delivered 1 reply/replies
+    server received: getUpdates ; sendMessage text='the recorded answer'
+    reply cursor = 1
+
+## Scenario 5 - >4096-char reply resumes at the first undelivered chunk
+
+See `live-telegram-partial-chunk-resume.log`. 9096-char body = 3 chunks.
+Server accepted chunk A, injected a failure on chunk B; flush left progress=1 and
+did not advance the cursor. The retry sent only B and C - A was never re-posted -
+then cleared progress and advanced the cursor. A third flush was a no-op.
+
+Also adversarial: pre-setting progress to the full chunk count (3) made the next
+flush send zero messages and advance the cursor, so a crash after the last chunk
+cannot re-post.
+
+## Scenario 6 - concurrent flushes deliver exactly once
+
+Two `fm-telegram.sh flush` processes against one recorded reply:
+sendMessage calls received = 1.
+
+## Scenario 7 - token is never in a diagnostic even for an unparseable API base
+
+    $ FM_TELEGRAM_API_BASE=api.telegram.org fm-telegram.py poll_list
+    fm-telegram: getUpdates request failed: ValueError          (exit 1, no token)
+    $ FM_TELEGRAM_API_BASE=api.telegram.org fm-telegram.sh poll
+    fm-telegram: getUpdates request failed: ValueError          (exit 1, no token)
+    $ FM_TELEGRAM_API_BASE=api.telegram.org fm-telegram.sh send "hello"
+    fm-telegram: sendMessage request failed: ValueError
+    fm-telegram: send failed                                    (exit 1, no token)
+
+## Scenario 8 - standing check reports a partially configured home instead of silence
+
+    $ fm-telegram-check.sh check   # no .env
+    telegram: missing required $FM_HOME/.env value: FM_TELEGRAM_BOT_TOKEN
+    $ fm-telegram-check.sh check   # again -> empty (already reported)
+
+Configured home on the live server:
+
+    $ fm-telegram-check.sh check
+    telegram: new message: queued update 20
+    .wake-queue: check telegram:20
+    $ fm-telegram-check.sh check   # no new updates -> empty (proven no-op)
+
+## Scenario 9 - arm / armed shim / disarm
+
+    $ fm-telegram-check.sh arm
+    armed: state/telegram.check.sh        (shim + trust binding written)
+    $ shim runs -> telegram: new message: queued update 30 ; wake queued
+    $ fm-telegram-check.sh disarm
+    disarmed: state/telegram.check.sh     (shim + trust binding removed)
