@@ -131,12 +131,11 @@ seed_marked_home() {
 
 # run_ff <dir> <base>: drive the shared ff helper in THIS shell (output to a file,
 # not a subshell, so FF_STATUS / FF_INSTR propagate). Sets FF_OUT to the printed
-# status line. Uses allow_detached=yes, ignore_seed_marker=yes (the secondmate
-# home contract).
+# status line. Uses allow_detached=yes (the secondmate home contract).
 FF_OUT=""
 run_ff() {
   local dir=$1 base=$2 outfile="$TMP_ROOT/ff.out"
-  ff_target "$dir" "secondmate sm" "$base" yes yes >"$outfile" 2>&1
+  ff_target "$dir" "secondmate sm" "$base" yes >"$outfile" 2>&1
   FF_OUT=$(cat "$outfile")
 }
 
@@ -216,6 +215,31 @@ test_scratchpad2_does_not_dirty_home() {
   [ "$(head_of "$w/sm")" = "$base" ] || fail "home did not fast-forward past an ignored scratchpad2/ directory"
   grep -q notes "$w/sm/scratchpad2/notes.txt" || fail "scratchpad2 contents were discarded"
   pass "scratchpad2/ does not mark a secondmate home dirty for the sync guard"
+}
+
+# --- an untracked file must not block the fast-forward ----------------------
+# A machine-local config file such as treehouse.toml lives untracked in a code
+# root - and predates the tracked .gitignore entry that hides it, so it is not
+# even ignored yet. It is not unlanded work: a fast-forward that would overwrite
+# it fails safely on its own. The guard must therefore advance past it rather
+# than reporting the home dirty and stalling the update, which is exactly how the
+# treehouse slot-limit file used to stop every code root from advancing.
+test_untracked_file_does_not_block_ff() {
+  local w c1 base
+  w=$(new_world ff-untracked)
+  c1=$(head_of "$w/main")
+  git -C "$w/main" worktree add -q --detach "$w/sm" "$c1"
+  printf 'max_trees = 2\n' > "$w/sm/treehouse.toml"   # untracked AND not gitignored
+  bump_primary "$w" instr
+  base=$(primary_head_commit "$w/main")
+
+  run_ff "$w/sm" "$base"
+
+  [ "$FF_STATUS" = updated ] \
+    || fail "FF_STATUS: expected updated, got '$FF_STATUS' (an untracked file must not block the update): $FF_OUT"
+  [ "$(head_of "$w/sm")" = "$base" ] || fail "home did not fast-forward past an untracked file"
+  grep -q 'max_trees = 2' "$w/sm/treehouse.toml" || fail "untracked file was discarded"
+  pass "an untracked, unignored file does not block the fast-forward"
 }
 
 # --- T4: diverged - a home with its own commit is skipped, commit preserved --
@@ -852,9 +876,9 @@ test_seed_marker_clean_when_gitignored() {
 # --- T13: an existing marker-only-dirty home converges on the next sweep --------
 # The convergence chicken-and-egg: existing homes predate the fix, so their marker
 # is still untracked-and-unignored, and the fix itself only arrives by fast-forward.
-# The marker-tolerant ff-skip (ignore_seed_marker=yes) bridges the gap for
-# linked-worktree homes, which bootstrap/spawn fast-forward from the primary's local HEAD.
-# Standalone-clone homes converge through /updatefirstmate's origin fetch instead.
+# The untracked-tolerant ff guard bridges the gap for linked-worktree homes:
+# an untracked file never reads as dirt, so the still-unignored marker does not
+# stall them and they advance to the fix that adds the ignore.
 # Once advanced, the now-ignored marker reads clean with no hand intervention.
 test_seed_marker_converges_existing_home() {
   local w c0 base
@@ -875,10 +899,9 @@ test_seed_marker_converges_existing_home() {
   pass "T13 gitignored marker: an existing marker-only-dirty home converges, then reads clean"
 }
 
-# --- T14: marker tolerance does not mask a genuinely dirty home -----------------
-# The ff-skip only forgives the seed marker; a real uncommitted change alongside the
-# marker must still refuse the fast-forward and leave the work untouched, exactly as
-# before this fix.
+# --- T14: untracked tolerance does not mask a genuinely dirty home ----------------
+# The ff-skip ignores untracked entries only; a real uncommitted tracked change must
+# still refuse the fast-forward and leave the work untouched, exactly as before.
 test_seed_marker_does_not_mask_real_dirt() {
   local w c0 base before
   w=$(new_world marker-real-dirt)
@@ -1346,6 +1369,7 @@ test_ff_updated
 test_ff_current
 test_ff_dirty
 test_scratchpad2_does_not_dirty_home
+test_untracked_file_does_not_block_ff
 test_ff_diverged
 test_ff_inflight_feature_branch
 test_no_fetch_in_local_path

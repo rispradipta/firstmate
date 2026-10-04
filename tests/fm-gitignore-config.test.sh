@@ -84,8 +84,34 @@ test_scratchpad2_does_not_dirty_porcelain() {
   pass "scratchpad2/ does not make git status --porcelain dirty"
 }
 
+test_treehouse_toml_is_ignored() {
+  git -C "$ROOT" check-ignore -q treehouse.toml \
+    || fail "git does not ignore treehouse.toml (the machine-local treehouse slot config must not dirty a code root)"
+  pass "the machine-local treehouse.toml is gitignored"
+}
+
+test_treehouse_toml_does_not_dirty_porcelain() {
+  # The fast-forward and fleet guards read git status --porcelain. treehouse init
+  # writes treehouse.toml at the code root, so a clone that has one must still
+  # read clean once the tracked .gitignore is in place.
+  local repo status
+  repo=$(mktemp -d "${TMPDIR:-/tmp}/fm-treehouse-ignore.XXXXXX")
+  git init -q "$repo"
+  cp "$ROOT/.gitignore" "$repo/.gitignore"
+  git -C "$repo" add .gitignore
+  git -C "$repo" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm 'seed gitignore'
+  printf 'max_trees = 2\n' > "$repo/treehouse.toml"
+  status=$(git -C "$repo" status --porcelain)
+  rm -rf "$repo"
+  [ -z "$status" ] || fail "treehouse.toml still dirties porcelain: $status"
+  pass "treehouse.toml does not make git status --porcelain dirty"
+}
+
 test_config_dir_ignored_as_category
 test_unrelated_path_stays_visible
 test_scratchpad_prefix_is_ignored
 test_scratchpad_prefix_ignores_no_tracked_path
 test_scratchpad2_does_not_dirty_porcelain
+test_treehouse_toml_is_ignored
+test_treehouse_toml_does_not_dirty_porcelain
