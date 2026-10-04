@@ -11,16 +11,19 @@
 #            and a durable `check: telegram <update_id>` wake is queued so the
 #            fm-telegram-respond skill loads. A malformed, non-text, or
 #            non-allowlisted update is ignored with a one-line diagnostic and is
-#            never queued as the captain's words. The offset advances only past
-#            updates that were actually recorded, so an interrupted poll
-#            re-fetches the rest and request-id dedup keeps that safe.
+#            never queued as the captain's words. The offset advances past
+#            ignored updates but never past one whose capture or wake failed,
+#            so an interrupted poll re-fetches the rest and request-id dedup
+#            keeps that safe.
 #   flush    Deliver recorded answers back to the configured chat. Records
 #            written by `bin/fm-inbox.sh reply` stay the single owner of the
 #            reply; flush reads those records, delivers only the ones whose note
 #            came from Telegram, and advances its own durable reply cursor so an
-#            answer is posted once. A delivered reply is journaled before the
-#            cursor moves, so a crash between send and journal can repeat a
-#            message but never lose one.
+#            answer is posted once. A reply over the 4096-character text limit
+#            is chunked, and progress is recorded after each accepted chunk so a
+#            retry resumes at the first undelivered chunk. A delivered reply is
+#            journaled before the cursor moves, so a crash between send and
+#            journal can repeat a message but never lose one.
 #   sync     poll then flush; this is what the standing check runs.
 #   send     Send one message to the configured chat (text argument, or `-` to
 #            read stdin).
@@ -43,6 +46,7 @@
 #                                              means any sender in the chat
 #   FM_TELEGRAM_API_BASE=<url>                 optional, default https://api.telegram.org
 #   FM_TELEGRAM_POLL_TIMEOUT=<seconds>         optional getUpdates long-poll, default 0
+#   FM_TELEGRAM_TIMEOUT=<seconds>              optional HTTP socket timeout, default 20
 #   FM_TELEGRAM_CURSOR=<path>                  optional offset-cursor path
 # FM_HOME falls back to the repo root when unset. FM_TELEGRAM_BOT_TOKEN and
 # FM_TELEGRAM_CHAT_ID are always required; the token is never logged, and the

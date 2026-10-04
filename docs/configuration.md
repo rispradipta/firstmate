@@ -1455,10 +1455,11 @@ Anything from another chat or user is untrusted input and never authority; `fm-t
 **Inbound and outbound**
 
 `bin/fm-telegram.sh poll` calls Telegram `getUpdates` once with a durable offset cursor and turns each new message from the allowlisted chat into a durable captain note through `bin/fm-inbox.sh note --request-id tg:<update_id>`, plus a durable `check: telegram <update_id>` wake.
-The request id makes a replayed update idempotent, so a retry never creates a second note, and the offset advances only past updates that were actually recorded.
+The request id makes a replayed update idempotent, so a retry never creates a second note; the offset advances past ignored updates but never past one whose capture or Telegram wake failed, so a retry re-fetches that update and the request id keeps it single.
 A malformed, non-text, or non-allowlisted update is ignored with a one-line diagnostic and is never queued as the captain's words.
 `bin/fm-telegram.sh flush` delivers recorded answers back to the configured chat.
 `bin/fm-inbox.sh reply` stays the single owner of the reply record; flush reads those records, delivers only the ones whose note came from Telegram, and advances its own reply cursor so an answer is posted once.
+A reply longer than Telegram's 4096-character text limit is split into chunks, and the count of chunks the API accepted is recorded as it goes, so a mid-reply failure resumes at the first undelivered chunk instead of re-posting the whole reply.
 A delivered reply is journaled before its cursor moves, so a crash between the send and the journal can repeat a message but never lose one.
 `bin/fm-telegram.sh send <text>` sends one message to the configured chat, and `status` prints configuration and both cursors without any network call or token value.
 
@@ -1474,7 +1475,7 @@ FM_TELEGRAM_BOT_TOKEN=   # bot token from BotFather; never printed or logged
 FM_TELEGRAM_CHAT_ID=     # the one allowlisted chat id
 ```
 
-`FM_TELEGRAM_ALLOWED_USERS` (optional comma- or space-separated sender user ids; empty means any sender in the allowlisted chat), `FM_TELEGRAM_API_BASE` (optional API root, default `https://api.telegram.org`), `FM_TELEGRAM_POLL_TIMEOUT` (optional `getUpdates` long-poll seconds, default 0), and `FM_TELEGRAM_CURSOR` (optional offset-cursor path, default `state/.telegram-cursor`) are optional.
+`FM_TELEGRAM_ALLOWED_USERS` (optional comma- or space-separated sender user ids; empty means any sender in the allowlisted chat), `FM_TELEGRAM_API_BASE` (optional API root, default `https://api.telegram.org`), `FM_TELEGRAM_POLL_TIMEOUT` (optional `getUpdates` long-poll seconds, default 0), `FM_TELEGRAM_TIMEOUT` (optional HTTP socket timeout in seconds, default 20; invalid or non-positive values become 20), and `FM_TELEGRAM_CURSOR` (optional offset-cursor path, default `state/.telegram-cursor`) are optional.
 The bot token is never logged, and the API URL that embeds it never appears in a diagnostic.
 
 **Arm unattended polling**
@@ -2372,6 +2373,7 @@ FM_TELEGRAM_CHAT_ID=    # the one allowlisted Telegram chat id
 FM_TELEGRAM_ALLOWED_USERS=   # optional Telegram sender allowlist; empty means any sender in the chat
 FM_TELEGRAM_API_BASE=https://api.telegram.org   # optional Telegram API root override
 FM_TELEGRAM_POLL_TIMEOUT=0   # optional Telegram getUpdates long-poll seconds
+FM_TELEGRAM_TIMEOUT=20   # Telegram-plane HTTP socket timeout in seconds; invalid or non-positive values become 20
 FM_TELEGRAM_CURSOR=     # optional Telegram offset-cursor path; default state/.telegram-cursor
 FMX_PAIRING_TOKEN=      # Relay pairing token; .env opt-in authorizes replies and eligible lifecycle actions
 FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainly for local relay development

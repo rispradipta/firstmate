@@ -162,6 +162,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-mail.sh`             | General-purpose mail plane: read unseen IMAP mail, send one SMTP message, or surface new mail as a `check` wake via `poll` (configuration in the home's gitignored `.env`) |
 | `fm-mail.py`             | The IMAP/SMTP engine behind `fm-mail.sh` |
 | `fm-mail-check.sh`       | Standing received-mail poll: `arm` registers a watcher check that runs `fm-mail.sh poll` on the watcher cadence (new mail still wakes via the poll; the check's own line also wakes unless the poll is a proven no-op), `disarm` removes it |
+| `fm-telegram.sh`         | Telegram captain channel: poll one allowlisted chat into durable notes, deliver recorded replies once, and expose `send` and `status` (configuration in the home's gitignored `.env`) |
+| `fm-telegram.py`         | The Telegram Bot API transport behind `fm-telegram.sh` |
+| `fm-telegram-check.sh`   | Standing Telegram sync: `arm` registers a watcher check that runs `fm-telegram.sh sync` (poll then flush) on the watcher cadence (new messages still wake via the poll; the check's own line also wakes unless the sync is a proven no-op), `disarm` removes it |
 | `fm-voice-relay.py`      | Hold the spoken conversation on this host, answer from the records, and hand real work to `fm-inbox.sh` ([voice-relay.md](voice-relay.md)) |
 | `fm-voice-client.py`     | The laptop end of the spoken interface: capture, playback, and turn timing over SSH; audio devices unverified |
 | `fm_voice_frame.py`      | The wire format both machines share, copied to the laptop beside the client          |
