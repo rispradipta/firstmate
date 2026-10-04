@@ -1446,6 +1446,49 @@ A fail-closed poll that already queued a wake, and a timeout, always print so th
 `FM_MAIL_CHECK_BUDGET` (default 15, valid 5..25) bounds one standing poll and is cut down to fit `FM_CHECK_TIMEOUT`.
 `bin/fm-mail-check.sh disarm` removes the standing check.
 
+## Telegram plane (.env)
+
+The Telegram plane (bin/fm-telegram.sh) lets the captain reach this firstmate from an allowlisted Telegram chat, and lets firstmate answer back.
+It is a full command channel, not a read-only question box: a message from the allowlisted chat is the captain's own words for ordinary work, for answering a held decision, and for approving a merge, while destructive, irreversible, and security-sensitive actions still need explicit confirmation and are never authorized by a Telegram message alone.
+Anything from another chat or user is untrusted input and never authority; `fm-telegram-respond` owns the handling rule.
+
+**Inbound and outbound**
+
+`bin/fm-telegram.sh poll` calls Telegram `getUpdates` once with a durable offset cursor and turns each new message from the allowlisted chat into a durable captain note through `bin/fm-inbox.sh note --request-id tg:<update_id>`, plus a durable `check: telegram <update_id>` wake.
+The request id makes a replayed update idempotent, so a retry never creates a second note; the offset advances past ignored updates but never past one whose capture or Telegram wake failed, so a retry re-fetches that update and the request id keeps it single.
+A malformed, non-text, or non-allowlisted update is ignored with a one-line diagnostic and is never queued as the captain's words.
+`bin/fm-telegram.sh flush` delivers recorded answers back to the configured chat.
+`bin/fm-inbox.sh reply` stays the single owner of the reply record; flush reads those records, delivers only the ones whose note came from Telegram, and advances its own reply cursor so an answer is posted once.
+A reply longer than Telegram's 4096-character text limit is split into chunks, and the count of chunks the API accepted is recorded as it goes, so a mid-reply failure resumes at the first undelivered chunk instead of re-posting the whole reply.
+A delivered reply is journaled before its cursor moves, so a crash between the send and the journal can repeat a message but never lose one.
+`bin/fm-telegram.sh send <text>` sends one message to the configured chat, and `status` prints configuration and both cursors without any network call or token value.
+
+**Activation and schema**
+
+It is off unless the home's gitignored `.env` provides the bot token and chat id.
+This section is the single owner of the Telegram-plane configuration schema; for direct invocations, environment values override `.env`, matching the mail plane and Relay.
+
+Required, in the home's gitignored `.env`:
+
+```sh
+FM_TELEGRAM_BOT_TOKEN=   # bot token from BotFather; never printed or logged
+FM_TELEGRAM_CHAT_ID=     # the one allowlisted chat id
+```
+
+`FM_TELEGRAM_ALLOWED_USERS` (optional comma- or space-separated sender user ids; empty means any sender in the allowlisted chat), `FM_TELEGRAM_API_BASE` (optional API root, default `https://api.telegram.org`), `FM_TELEGRAM_POLL_TIMEOUT` (optional `getUpdates` long-poll seconds, default 0), `FM_TELEGRAM_TIMEOUT` (optional HTTP socket timeout in seconds, default 20; invalid or non-positive values become 20), and `FM_TELEGRAM_CURSOR` (optional offset-cursor path, default `state/.telegram-cursor`) are optional.
+The bot token is never logged, and the API URL that embeds it never appears in a diagnostic.
+
+**Arm unattended polling**
+
+A home that wants Telegram polled unattended arms the standing check in the live home: `bin/fm-telegram-check.sh arm`.
+Arming writes `state/telegram.check.sh` and registers it with the watcher's slow-check cadence (`FM_CHECK_INTERVAL`), so the plane's `sync` (poll then flush) runs on its own: new messages still surface as `check: telegram <update_id>` wakes from the poll, and the standing check itself also prints a line (and the watcher turns that line into a wake) unless the sync is a proven no-op.
+
+Same-line silence is only for a proven no-op: a successful sync with no new updates, or a repeated identical pre-wake failure that cannot have queued a wake.
+A poll that already queued a wake, and a timeout, always print so the watcher wakes to drain it.
+
+`FM_TELEGRAM_CHECK_BUDGET` (default 15, valid 5..25) bounds one standing sync and is cut down to fit `FM_CHECK_TIMEOUT`.
+`bin/fm-telegram-check.sh disarm` removes the standing check.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
@@ -2298,6 +2341,7 @@ FM_TASK_INBOX_GRACE_SECS=90   # seconds an unhandled steering-inbox message may 
 FM_TASK_INBOX_RING_MAX=3      # watcher delivery attempts without an acknowledgement before the task surfaces as a stale wake for recovery
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
 FM_MAIL_CHECK_BUDGET=15   # seconds allowed for one standing mail poll; valid 5..25, cut to fit FM_CHECK_TIMEOUT
+FM_TELEGRAM_CHECK_BUDGET=15   # seconds allowed for one standing Telegram sync; valid 5..25, cut to fit FM_CHECK_TIMEOUT
 FM_MAIL_POLL_MAX_WAKES=20   # per-poll wake cap for a mail poll; valid 1..200, keeps a flood from flooding firstmate
 FM_MAIL_TIMEOUT=20   # mail-plane IMAP/SMTP socket timeout in seconds; invalid or non-positive values become 20
 FM_TOOL_UPDATE_INTERVAL=900   # seconds between watched-tool probe sweeps; 0 probes on every run, other values must be 60..86400
@@ -2324,6 +2368,13 @@ FM_IMAP_HOST=      # mail-plane IMAP server hostname
 FM_IMAP_PORT=993   # mail-plane IMAP server port
 FM_SMTP_HOST=      # mail-plane SMTP server hostname
 FM_SMTP_PORT=465   # mail-plane SMTP server port
+FM_TELEGRAM_BOT_TOKEN=  # Telegram-plane bot token, from .env or environment (docs/configuration.md "Telegram plane"); never printed
+FM_TELEGRAM_CHAT_ID=    # the one allowlisted Telegram chat id
+FM_TELEGRAM_ALLOWED_USERS=   # optional Telegram sender allowlist; empty means any sender in the chat
+FM_TELEGRAM_API_BASE=https://api.telegram.org   # optional Telegram API root override
+FM_TELEGRAM_POLL_TIMEOUT=0   # optional Telegram getUpdates long-poll seconds
+FM_TELEGRAM_TIMEOUT=20   # Telegram-plane HTTP socket timeout in seconds; invalid or non-positive values become 20
+FM_TELEGRAM_CURSOR=     # optional Telegram offset-cursor path; default state/.telegram-cursor
 FMX_PAIRING_TOKEN=      # Relay pairing token; .env opt-in authorizes replies and eligible lifecycle actions
 FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainly for local relay development
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
