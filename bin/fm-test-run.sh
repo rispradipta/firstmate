@@ -681,7 +681,8 @@ list_portable_serial() {
 # Measured portable-serial script durations in milliseconds, from the CI timing
 # artifacts recorded in docs/fm-test-portable-shards.md. Each value is the
 # slowest successful sample in the referenced complete/partial CI runs, with
-# the version-specific host and native-Windows exceptions documented there.
+# the per-value exceptions (including the apportioned split supervision-host
+# engine share) documented there.
 # These are balance hints only: the shard
 # partition stays complete and disjoint whatever they say, so a stale hint costs
 # balance rather than coverage. That doc owns the refresh procedure.
@@ -1421,6 +1422,8 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       ;;
     tests/fm-supervision-host.test.sh)
+      # The engine suite sources this file for the shared fixture and cases, so
+      # a change here must select that second share as well as this one.
       printf '%s\n' "__script__:fm-supervision-host.test.sh"
       printf '%s\n' "__script__:fm-supervision-host-engine.test.sh"
       ;;
