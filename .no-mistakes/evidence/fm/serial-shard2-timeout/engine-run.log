@@ -1,0 +1,12 @@
+ok - host+hook: a successor that closes during a held engine turn does not suppress the branch-outcome rewake
+ok - host+hook: a refused hand-back becomes a delivered failure notice
+ok - host: parked child-exit sampling uses ordinary half-second sleeps
+ok - drain: BRANCH OUTCOMES runs on a Claude home by default and on another primary with the file, never with off, and never on Pi
+ok - drain: repeated captain outcomes collapse per task, and the byte cap presents only the run its acknowledgement covers
+ok - drain: the BRANCH OUTCOMES budgets count bytes, cutting multibyte summaries by whole characters in any locale
+ok - drain: branch outcomes stay unread when a projection of the store fails
+not ok - a routine outcome a drain could not print must follow on the next drain (missing: '[seq 1] demo: merged the docs fix')
+--- output ---
+
+ENGINE_EXIT=1
+07:40:46

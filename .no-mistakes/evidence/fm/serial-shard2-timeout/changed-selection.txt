@@ -1,0 +1,3 @@
+tests/fm-test-run.test.sh
+tests/fm-supervision-host-engine.test.sh
+tests/fm-supervision-host.test.sh
