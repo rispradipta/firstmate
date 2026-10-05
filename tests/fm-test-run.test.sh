@@ -120,6 +120,8 @@ init_changed_fixture_repo() {
     fm-backend-cmux.test.sh \
     fm-backend-zellij.test.sh \
     fm-control-herdr-smoke.test.sh \
+    fm-supervision-host.test.sh \
+    fm-supervision-host-engine.test.sh \
     fm-backend-orca.test.sh; do
     printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/$script"
     chmod +x "$repo/tests/$script"
@@ -1404,6 +1406,15 @@ test_changed_shared_fixture_selects_its_readers() {
   esac
   git -C "$repo" add tests/shared-probe-fixture.sh
   git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm fixture-change
+
+  printf '\n' >>"$repo/tests/fm-supervision-host.test.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
+  assert_contains "$listed" "tests/fm-supervision-host.test.sh" \
+    "the supervision-host file selects its own share"
+  assert_contains "$listed" "tests/fm-supervision-host-engine.test.sh" \
+    "the supervision-host file selects the engine share that sources its fixture"
+  git -C "$repo" add tests/fm-supervision-host.test.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm host-change
 
   printf '\n' >>"$repo/tests/unread-thing.sh"
   set +e
